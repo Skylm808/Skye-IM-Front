@@ -60,4 +60,4 @@ npm run preview
 
 ## License
 
-Private / Internal use (如需开源可在此补充协议)。
+MIT License. See `LICENSE`.
