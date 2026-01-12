@@ -42,14 +42,13 @@ npm run preview
 
 ## 后端对接（开发代理）
 
-开发环境通过 `vite` 代理转发接口（见 `vite.config.js`）：
+开发环境通过 `vite` 代理转发接口（见 `vite.config.js`），或者直接通过 `src/api/request.js` 配置 BaseURL。
 
-- `/api/v1/auth` → `http://localhost:10000`
-- `/api/v1/user` → `http://localhost:10100`
-- `/api/v1/friend` → `http://localhost:10200`
-- `/api` → `http://localhost:8888`
+所有模块统一通过网关访问：
 
-如你的后端端口/网关不同，按需修改 `vite.config.js` 的 `server.proxy`。
+- `/api` → `http://localhost:8080` (Gateway)
+
+如你的后端网关端口不同，请修改 `src/api/request.js` 中的 `baseURL` 或 `vite.config.js` 的代理配置。
 
 ## 目录结构（简要）
 

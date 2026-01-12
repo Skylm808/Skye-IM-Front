@@ -6,20 +6,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api/v1/friend': {
-        target: 'http://localhost:10200',
-        changeOrigin: true,
-      },
-      '/api/v1/user': {
-        target: 'http://localhost:10100',
-        changeOrigin: true,
-      },
-      '/api/v1/auth': {
-        target: 'http://localhost:10000',
-        changeOrigin: true,
-      },
       '/api': {
-        target: 'http://localhost:8888',
+        target: 'http://localhost:8080',
         changeOrigin: true,
       },
     },
