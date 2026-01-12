@@ -10,6 +10,9 @@ import request from './request';
  * @property {string} email
  * @property {number} status - 1-正常 0-禁用
  * @property {number} createdAt - Unix 时间戳（秒）
+ * @property {string} signature - 个性签名
+ * @property {number} gender - 性别：0-未知, 1-男, 2-女
+ * @property {string} region - 地区
  */
 
 /**
@@ -22,6 +25,9 @@ import request from './request';
  * @property {string=} nickname
  * @property {string=} avatar
  * @property {string=} phone
+ * @property {string=} signature
+ * @property {number=} gender
+ * @property {string=} region
  */
 
 /**
@@ -60,6 +66,15 @@ export const searchUser = (keyword) => {
 };
 
 /**
+ * 全局模糊搜索 (用户和群组)
+ * @param {string} keyword
+ * @returns {Promise<{users: UserInfo[], groups: Object[]}>}
+ */
+export const searchGlobal = (keyword) => {
+  return request.get('/api/v1/user/search/global', { params: { keyword } });
+};
+
+/**
  * 获取指定用户信息
  * @param {number|string} id
  * @returns {Promise<ProfileResponse|UserInfo>}
@@ -67,4 +82,3 @@ export const searchUser = (keyword) => {
 export const getUserById = (id) => {
   return request.get(`/api/v1/user/${id}`);
 };
-

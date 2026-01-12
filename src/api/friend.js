@@ -4,6 +4,10 @@ export const friendApi = {
   // 好友申请：发送申请
   addFriendRequest: (toUserId, message) => request.post('/api/v1/friend/request', { toUserId, message }),
 
+  // 好友申请：兼容旧调用（等同于 getReceivedRequests）
+  getFriendRequests: (page = 1, pageSize = 20) =>
+    request.get('/api/v1/friend/request/received', { params: { page, pageSize } }),
+
   // 好友申请：收到的申请
   getReceivedRequests: (page = 1, pageSize = 20) =>
     request.get('/api/v1/friend/request/received', { params: { page, pageSize } }),
@@ -32,4 +36,3 @@ export const friendApi = {
   // 黑名单：列表
   getBlacklist: (page = 1, pageSize = 20) => request.get('/api/v1/friend/blacklist', { params: { page, pageSize } }),
 };
-

@@ -5,6 +5,12 @@ import { getUserById } from '../api/user';
 
 const { Text } = Typography;
 
+const GENDER_MAP = {
+  0: '未知',
+  1: '男',
+  2: '女',
+};
+
 const normalizeUser = (data) => (data && data.user ? data.user : data);
 
 const formatCreatedAt = (createdAt) => {
@@ -68,6 +74,9 @@ const UserProfileModal = ({ open, userId, onClose }) => {
 
           <Descriptions bordered size="small" column={1}>
             <Descriptions.Item label="用户 ID">{user.id}</Descriptions.Item>
+            <Descriptions.Item label="个性签名">{user.signature || '-'}</Descriptions.Item>
+            <Descriptions.Item label="性别">{GENDER_MAP[user.gender] || '未知'}</Descriptions.Item>
+            <Descriptions.Item label="地区">{user.region || '-'}</Descriptions.Item>
             <Descriptions.Item label="邮箱">{user.email || '-'}</Descriptions.Item>
             <Descriptions.Item label="电话">{user.phone || '-'}</Descriptions.Item>
             <Descriptions.Item label="注册时间">{formatCreatedAt(user.createdAt)}</Descriptions.Item>
