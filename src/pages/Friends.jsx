@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Empty, Input, List, Space, Typography, message } from 'antd';
-import { BellOutlined, PlusOutlined, SafetyOutlined } from '@ant-design/icons';
+import { Button, Card, Empty, Input, List, Space, Typography, message, Avatar } from 'antd';
+import { BellOutlined, PlusOutlined, SafetyOutlined, FileTextOutlined, RightOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import UserProfileModal from '../components/UserProfileModal';
 import FriendCard from '../components/friend/FriendCard';
 import RemarkEditModal from '../components/friend/RemarkEditModal';
 import { friendApi } from '../api/friend';
+import { getUserInfo } from '../api/auth';
 import useUserCache from '../hooks/useUserCache';
 
 const { Title, Text } = Typography;
@@ -15,6 +16,7 @@ const Friends = () => {
   const navigate = useNavigate();
   const { getUser, ensureUsers } = useUserCache();
 
+  const [currentUser, setCurrentUser] = useState(null);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -46,6 +48,7 @@ const Friends = () => {
 
   useEffect(() => {
     load(page);
+    getUserInfo().then(res => setCurrentUser(res.user || res)).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
 
@@ -64,6 +67,15 @@ const Friends = () => {
       return hay.includes(kw);
     });
   }, [keyword, list, getUser]);
+
+  const showSelf = useMemo(() => {
+    if (!currentUser) return false;
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return true;
+    return ['我', '文件', '助手', 'myself', 'file'].some(k => k.includes(kw)) || 
+           currentUser.nickname?.toLowerCase().includes(kw) || 
+           currentUser.username?.toLowerCase().includes(kw);
+  }, [currentUser, keyword]);
 
   const openRemark = (relation) => {
     setSelectedFriend(relation);
@@ -89,7 +101,7 @@ const Friends = () => {
     try {
       await friendApi.deleteFriend(friendId);
       message.success('已删除好友');
-      const nextPage = page > 1 && filtered.length === 1 ? page - 1 : page;
+      const nextPage = page > 1 && list.length === 1 ? page - 1 : page;
       setPage(nextPage);
       await load(nextPage);
     } finally {
@@ -144,6 +156,23 @@ const Friends = () => {
       </Card>
 
       <Card style={{ borderRadius: 16 }}>
+        {showSelf && currentUser && (
+           <div style={{ marginBottom: 12 }}>
+             <FriendCard
+               relation={{ 
+                 friendId: currentUser.id, 
+                 remark: `${currentUser.nickname || currentUser.username} (我)`,
+                 isSelf: true 
+               }}
+               user={currentUser}
+               working={false}
+               onViewProfile={() => {
+                 navigate(`/chat?type=friend&id=${currentUser.id}`);
+               }}
+             />
+           </div>
+        )}
+
         <List
           loading={loading}
           dataSource={filtered}
@@ -182,9 +211,14 @@ const Friends = () => {
       <UserProfileModal
         open={profileOpen}
         userId={selectedUserId}
+        currentUserId={currentUser?.id}
         onClose={() => {
           setProfileOpen(false);
           setSelectedUserId(null);
+        }}
+        onSendMessage={(user) => {
+            navigate(`/chat?type=friend&id=${user.id}`);
+            setProfileOpen(false);
         }}
       />
 

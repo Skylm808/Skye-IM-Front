@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, Row, Col, message, Badge, Dropdown, Descriptions, Popover } from 'antd';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover } from 'antd';
 import { 
   UserOutlined, 
   TeamOutlined, 
@@ -11,8 +11,6 @@ import {
   ManOutlined,
   WomanOutlined,
   QuestionOutlined,
-  BellOutlined,
-  NotificationOutlined,
   IdcardOutlined,
   EnvironmentOutlined,
   PhoneOutlined,
@@ -30,6 +28,7 @@ import { friendApi } from '../api/friend';
 import { groupApi } from '../api/group';
 import { getUserInfo } from '../api/auth';
 import useUserCache from '../hooks/useUserCache';
+import GroupJoinRequestCard from '../components/group/GroupJoinRequestCard';
 
 const { Sider, Content } = Layout;
 const { Text, Title } = Typography;
@@ -39,21 +38,14 @@ const { confirm } = Modal;
 const UserDetailCard = ({ user, friend, navigate, onClose }) => {
   if (!user) return <Empty description="无法加载用户信息" />;
   
-  // Debug: Check what data is actually returned
-  console.log('UserDetailCard received user:', user);
-
   let genderText = '未知';
   let genderColor = 'default';
   let genderIcon = <QuestionOutlined />;
 
-  // Strict check per backend schema (Gender int64)
-  // Use loose equality to handle potential string serialization of int64
-  // eslint-disable-next-line eqeqeq
   if (user.gender == 1) {
     genderText = '男';
     genderColor = 'blue';
     genderIcon = <ManOutlined />;
-  // eslint-disable-next-line eqeqeq
   } else if (user.gender == 2) {
     genderText = '女';
     genderColor = 'magenta';
@@ -122,7 +114,7 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
            <Button type="primary" size="large" block icon={<MessageOutlined />} onClick={handleSendMessage}>
              发消息
            </Button>
-           {friend && (
+           {friend && !friend.isSelf && (
              <Button size="large" block danger type="text">删除好友</Button>
            )}
         </div>
@@ -134,6 +126,7 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
 // Helper for Group Member Item with Popover State
 const GroupMemberItem = ({ member, user, isOwner, isMe, onKick, navigate }) => {
   const [open, setOpen] = useState(false);
+  const isMuted = member?.mute === 1 || member?.muted === 1;
 
   // Styling for the member card
   const itemStyle = {
@@ -141,7 +134,9 @@ const GroupMemberItem = ({ member, user, isOwner, isMe, onKick, navigate }) => {
     position: 'relative', 
     padding: '16px 8px', 
     background: '#f8fafc', 
+    border: '1px solid #e2e8f0',
     borderRadius: 12,
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
     transition: 'all 0.2s',
     cursor: 'pointer',
     height: 148,
@@ -184,6 +179,11 @@ const GroupMemberItem = ({ member, user, isOwner, isMe, onKick, navigate }) => {
            {member.role === 2 && (
              <Tag color="blue" style={{ margin: 0, marginInlineEnd: 0, marginBottom: 0, height: 22, lineHeight: '22px' }}>
                管理员
+             </Tag>
+           )}
+           {isMuted && (
+             <Tag color="red" style={{ margin: 0, marginInlineStart: 6, marginBottom: 0, height: 22, lineHeight: '22px' }}>
+               禁言
              </Tag>
            )}
         </div>
@@ -245,7 +245,6 @@ const Contacts = () => {
   // Data
   const [friends, setFriends] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [friendRequests, setFriendRequests] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
 
   // 搜索过滤
@@ -253,6 +252,13 @@ const Contacts = () => {
 
   // Group Details
   const [groupMembers, setGroupMembers] = useState([]);
+  const [myRoleData, setMyRoleData] = useState(null); // Changed from myRole number to object { groupId, role }
+  const [joinRequests, setJoinRequests] = useState([]);
+  const [joinRequestsLoading, setJoinRequestsLoading] = useState(false);
+  const [joinRequestsPage, setJoinRequestsPage] = useState(1);
+  const [joinRequestsTotal, setJoinRequestsTotal] = useState(0);
+  const [workingJoinRequestId, setWorkingJoinRequestId] = useState(null);
+  const joinRequestsPageSize = 6;
 
   // Modals
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -260,6 +266,7 @@ const Contacts = () => {
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteFriendId, setInviteFriendId] = useState(null);
+  const [inviteMessage, setInviteMessage] = useState('');
   
   const [createGroupForm] = Form.useForm();
 
@@ -274,12 +281,9 @@ const Contacts = () => {
       await ensureUsers(fRes.list?.map(f => f.friendId) || []);
 
       const gRes = await groupApi.getList(1, 100);
-      setGroups(gRes.list || []);
+      // Filter out dismissed groups (status === 2)
+      setGroups((gRes.list || []).filter(g => g.status !== 2));
       
-      const reqRes = await friendApi.getFriendRequests(1, 20);
-      setFriendRequests(reqRes.list || []);
-      await ensureUsers(reqRes.list?.map(r => r.userId) || []);
-
     } catch (e) {
       console.error(e);
     }
@@ -295,22 +299,102 @@ const Contacts = () => {
      }
   }, [location.state]);
 
-  // Fetch Group Members
+  // Fetch Group Members and Determine Role
   useEffect(() => {
     if (selectedItem?.type === 'group') {
+      const currentGroupId = selectedItem.data.groupId;
+      setGroupMembers([]); // Reset members immediately
+      
+      // Optimistic role set if owner
+      const isOwner = String(selectedItem.data.ownerId) === String(currentUser?.id);
+      setMyRoleData({ groupId: currentGroupId, role: isOwner ? 1 : null });
+
       const fetchMembers = async () => {
         try {
-          const res = await groupApi.getMembers(selectedItem.data.groupId, 1, 50);
+          const res = await groupApi.getMembers(currentGroupId, 1, 50);
           const list = sortGroupMembers(res.list || []);
-          setGroupMembers(list);
-          await ensureUsers(list.map(m => m.userId) || []);
+          
+          // Only update if still on same group
+          if (selectedItem.data.groupId === currentGroupId) {
+             setGroupMembers(list);
+             await ensureUsers(list.map(m => m.userId) || []);
+
+             // Accurate role check
+             const me = list.find(m => String(m.userId) === String(currentUser?.id));
+             if (me) {
+               setMyRoleData({ groupId: currentGroupId, role: me.role });
+             }
+          }
         } catch (e) {
           console.error(e);
         }
       };
       fetchMembers();
+    } else {
+      setMyRoleData(null);
     }
-  }, [selectedItem, ensureUsers]);
+  }, [selectedItem, ensureUsers, currentUser]);
+
+  const currentGroupRole = useMemo(() => {
+      if (selectedItem?.type !== 'group') return null;
+      if (myRoleData && String(myRoleData.groupId) === String(selectedItem.data.groupId)) {
+          return myRoleData.role;
+      }
+      return null;
+  }, [myRoleData, selectedItem]);
+
+  const canManageJoinRequests = currentGroupRole === 1 || currentGroupRole === 2;
+
+  const loadJoinRequests = useCallback(async (page = 1) => {
+    if (selectedItem?.type !== 'group') return;
+    
+    // Strict Permission Check
+    // If role is not loaded yet or mismatch, currentGroupRole will be null/mismatch
+    // and canManageJoinRequests will be false. 
+    // But we double check here just in case caller bypassed it.
+    if (!myRoleData || String(myRoleData.groupId) !== String(selectedItem.data.groupId)) {
+        return;
+    }
+    const role = myRoleData.role;
+    if (role !== 1 && role !== 2) return;
+
+    setJoinRequestsLoading(true);
+    setJoinRequestsPage(page);
+    try {
+      const res = await groupApi.getJoinRequests(selectedItem.data.groupId, page, joinRequestsPageSize);
+      const list = Array.isArray(res) ? res : (res?.list || res?.data?.list || []);
+      const total = Number(res?.total || res?.totalCount || res?.data?.total || list.length);
+      const normalized = list.map((req) => ({
+        ...req,
+        groupName: req.groupName || selectedItem.data.name,
+        groupAvatar: req.groupAvatar || selectedItem.data.avatar,
+      }));
+      setJoinRequests(normalized);
+      setJoinRequestsTotal(total);
+      await ensureUsers(list.map((req) => req.userId) || []);
+    } catch (e) {
+      // Suppress permission error and 404 (Not Found)
+      if (e?.response?.status === 404) {
+         console.warn('Join requests API not found (404), feature might be disabled on backend.');
+         setJoinRequests([]);
+         setJoinRequestsTotal(0);
+      } else if (e?.response?.status !== 403 && !e?.message?.includes('只有群主')) {
+         console.error(e);
+      }
+    } finally {
+      setJoinRequestsLoading(false);
+    }
+  }, [selectedItem, joinRequestsPageSize, ensureUsers, myRoleData]);
+
+  useEffect(() => {
+    if (selectedItem?.type === 'group' && canManageJoinRequests) {
+      setJoinRequestsPage(1);
+      loadJoinRequests(1);
+    } else {
+      setJoinRequests([]);
+      setJoinRequestsTotal(0);
+    }
+  }, [selectedItem?.type, selectedItem?.data?.groupId, canManageJoinRequests, loadJoinRequests]);
 
   const handleGlobalSearch = (value) => {
     setSearchText(value);
@@ -342,11 +426,27 @@ const Contacts = () => {
   };
 
   // Filtered Lists
-  const filteredFriends = friends.filter(item => {
-    const u = getUser(item.friendId);
-    const name = item.remark || u?.nickname || u?.username || '';
-    return name.toLowerCase().includes(searchText.toLowerCase());
-  });
+  const filteredFriends = useMemo(() => {
+    const list = friends.filter(item => {
+      const u = getUser(item.friendId);
+      const name = item.remark || u?.nickname || u?.username || '';
+      return name.toLowerCase().includes(searchText.toLowerCase());
+    });
+
+    if (currentUser) {
+       const name = currentUser.nickname || currentUser.username || '';
+       const selfName = `${name} (我)`;
+       if (!searchText || selfName.toLowerCase().includes(searchText.toLowerCase())) {
+           const selfItem = {
+               friendId: currentUser.id,
+               remark: selfName,
+               isSelf: true
+           };
+           return [selfItem, ...list];
+       }
+    }
+    return list;
+  }, [friends, currentUser, searchText, getUser]);
 
   const filteredGroups = groups.filter(item => 
     item.name.toLowerCase().includes(searchText.toLowerCase())
@@ -354,11 +454,13 @@ const Contacts = () => {
 
   const handleCreateGroup = async (values) => {
     try {
-      await groupApi.create({
+      const payload = {
         name: values.name,
         description: values.description,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=' + values.name
-      });
+      };
+      if (values.maxMembers) payload.maxMembers = Number(values.maxMembers);
+      await groupApi.create(payload);
       message.success('群组创建成功');
       setIsCreateGroupOpen(false);
       createGroupForm.resetFields();
@@ -371,10 +473,15 @@ const Contacts = () => {
   const handleInvite = async () => {
     if (!inviteFriendId || selectedItem?.type !== 'group') return;
     try {
-      await groupApi.invite(selectedItem.data.groupId, [inviteFriendId]);
+      await groupApi.sendInvitation({
+        groupId: String(selectedItem.data.groupId),
+        inviteeId: inviteFriendId,
+        message: inviteMessage || undefined
+      });
       message.success('邀请已发送');
       setIsInviteOpen(false);
       setInviteFriendId(null);
+      setInviteMessage('');
     } catch {
       message.error('邀请失败');
     }
@@ -389,8 +496,21 @@ const Contacts = () => {
         try {
           await groupApi.kick(selectedItem.data.groupId, memberId);
           message.success('已踢出');
-          const res = await groupApi.getMembers(selectedItem.data.groupId, 1, 50);
-          setGroupMembers(res.list || []);
+          
+          // Optimistic update
+          setGroupMembers(prev => prev.filter(m => String(m.userId) !== String(memberId)));
+          
+          // Re-fetch to be sure, with a slight delay for DB consistency
+          setTimeout(async () => {
+             try {
+               const res = await groupApi.getMembers(selectedItem.data.groupId, 1, 50);
+               // Only update if we are still viewing the same group
+               if (selectedItem?.data?.groupId) {
+                  const list = sortGroupMembers(res.list || []);
+                  setGroupMembers(list);
+               }
+             } catch(e) { console.error(e); }
+          }, 500);
         } catch {
           message.error('操作失败');
         }
@@ -436,20 +556,25 @@ const Contacts = () => {
     });
   };
 
-  const handleAcceptFriend = async (requestId) => {
-     try {
-       await friendApi.handleFriendRequest(requestId, 1); 
-       message.success('已添加好友');
-       fetchData();
-     } catch {
-       message.error('操作失败');
-     }
+  const handleJoinRequestAction = async (requestId, action) => {
+    if (!selectedItem?.data?.groupId) return;
+    setWorkingJoinRequestId(requestId);
+    try {
+      await groupApi.handleJoinRequest({ requestId, action });
+      message.success(action === 1 ? '已同意' : '已拒绝');
+      await loadJoinRequests(joinRequestsPage);
+    } catch {
+      message.error('操作失败');
+    } finally {
+      setWorkingJoinRequestId(null);
+    }
   };
 
   // Renderers
   const renderFriendDetail = (friend) => {
     if (!friend || !friend.friendId) return <Empty description="无法加载好友信息" />;
-    const u = getUser(friend.friendId);
+    let u = getUser(friend.friendId);
+    if (friend.isSelf && currentUser) u = currentUser;
     
     if (!u) {
        return (
@@ -467,50 +592,159 @@ const Contacts = () => {
   };
 
   const renderGroupDetail = (group) => {
-    const isOwner = group.role === 1;
+    const role = currentGroupRole || (String(group.ownerId) === String(currentUser?.id) ? 1 : null);
+    const isOwner = role === 1;
+    const canManageGroup = role === 1 || role === 2;
     const sortedMembers = sortGroupMembers(groupMembers);
+    const pendingJoinCount = joinRequests.filter((req) => req.status === 0).length;
+    
+    // Stats
+    const memberCount = groupMembers.length || group.memberCount || 0;
+    const maxMembers = group.maxMembers || 200;
 
     return (
-      <div style={{ padding: '32px', height: '100%', overflowY: 'auto' }}>
-        <div style={{ background: '#fff', borderRadius: 24, padding: 32, boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-             <Avatar shape="square" size={88} src={group.avatar} icon={<TeamOutlined />} style={{ borderRadius: 16 }} />
-             <div style={{ marginLeft: 24, flex: 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <Title level={2} style={{ margin: 0 }}>{group.name}</Title>
-                    <Text type="secondary" style={{ display: 'block', marginTop: 8, maxWidth: 500 }}>
-                      {group.description || '暂无群简介'}
-                    </Text>
-                  </div>
-                  <Space>
-                    <Button type="primary" size="large" icon={<MessageOutlined />} onClick={() => navigate(`/chat?type=group&id=${group.groupId}`)}>
-                      进入群聊
-                    </Button>
-                    <Button size="large" icon={<UserAddOutlined />} onClick={() => setIsInviteOpen(true)}>邀请</Button>
-                    {isOwner ? (
-                       <Button size="large" danger onClick={handleDismissGroup}>解散</Button>
-                    ) : (
-                       <Button size="large" danger onClick={handleQuitGroup}>退出</Button>
-                    )}
-                  </Space>
-                </div>
-             </div>
-          </div>
+      <div style={{ height: '100%', overflowY: 'auto' }}>
+        {/* Hero Header */}
+        <div style={{ 
+           background: 'linear-gradient(135deg, #eff6ff 0%, #fff 100%)', 
+           padding: '40px 32px 32px',
+           borderBottom: '1px solid #f1f5f9'
+        }}>
+           <div style={{ maxWidth: 800, margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+              <Avatar 
+                shape="square" 
+                size={100} 
+                src={group.avatar} 
+                icon={<TeamOutlined />} 
+                style={{ borderRadius: 24, boxShadow: '0 8px 24px rgba(14, 165, 233, 0.15)', border: '4px solid #fff' }} 
+              />
+              
+              <Title level={2} style={{ marginTop: 20, marginBottom: 8 }}>{group.name}</Title>
+              <Space style={{ marginBottom: 16 }}>
+                 <Tag bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>ID: {group.groupId}</Tag>
+                 {isOwner && <Tag color="gold" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>我是群主</Tag>}
+                 {!isOwner && role === 2 && <Tag color="blue" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>管理员</Tag>}
+              </Space>
+              
+              <Text type="secondary" style={{ maxWidth: 500, lineHeight: 1.6 }}>
+                {group.description || '暂无群简介'}
+              </Text>
 
-          <div style={{ marginTop: 40 }}>
-             <Title level={4} style={{ marginBottom: 24 }}>群成员 ({groupMembers.length})</Title>
-             <Row gutter={[20, 20]}>
+              {/* Action Bar */}
+              <div style={{ display: 'flex', gap: 16, marginTop: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
+                 <Button 
+                   type="primary" 
+                   size="large" 
+                   shape="round"
+                   icon={<MessageOutlined />} 
+                   onClick={() => navigate(`/chat?type=group&id=${group.groupId}`)}
+                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+                 >
+                   进入群聊
+                 </Button>
+                 
+                 <Button 
+                   size="large" 
+                   shape="round" 
+                   icon={<UserAddOutlined />} 
+                   onClick={() => {
+                      setInviteFriendId(null);
+                      setInviteMessage('');
+                      setIsInviteOpen(true);
+                   }}
+                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+                 >
+                   邀请成员
+                 </Button>
+                 
+                 <Button 
+                   size="large" 
+                   shape="round" 
+                   danger
+                   icon={isOwner ? <DeleteOutlined /> : <StopOutlined />} 
+                   onClick={isOwner ? handleDismissGroup : handleQuitGroup}
+                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+                 >
+                   {isOwner ? '解散群组' : '退出群组'}
+                 </Button>
+              </div>
+           </div>
+        </div>
+
+        {/* Content Section */}
+        <div style={{ maxWidth: 1000, margin: '0 auto', padding: '32px' }}>
+          
+          {/* Join Requests (Admin Only) */}
+          {canManageJoinRequests && (
+            <Card
+              bordered={false}
+              style={{ borderRadius: 16, boxShadow: '0 4px 20px rgba(0,0,0,0.03)', marginBottom: 32 }}
+              title={
+                <Space>
+                  <span style={{ fontSize: 18, fontWeight: 600 }}>入群申请</span>
+                  {pendingJoinCount > 0 && <Badge count={pendingJoinCount} />}
+                </Space>
+              }
+              extra={
+                <Button type="link" onClick={() => loadJoinRequests(joinRequestsPage)} loading={joinRequestsLoading}>
+                  刷新列表
+                </Button>
+              }
+            >
+               {joinRequests.length > 0 ? (
+                 <List
+                    loading={joinRequestsLoading}
+                    dataSource={joinRequests}
+                    rowKey="id"
+                    split={false}
+                    pagination={{
+                      current: joinRequestsPage,
+                      pageSize: joinRequestsPageSize,
+                      total: joinRequestsTotal,
+                      showSizeChanger: false,
+                      onChange: (page) => loadJoinRequests(page),
+                      align: 'center'
+                    }}
+                    renderItem={(item) => {
+                      const u = getUser(item.userId);
+                      return (
+                        <div style={{ marginBottom: 12 }}>
+                          <GroupJoinRequestCard
+                            request={item}
+                            user={u}
+                            group={group}
+                            mode="received"
+                            working={workingJoinRequestId === item.id}
+                            onAccept={() => handleJoinRequestAction(item.id, 1)}
+                            onReject={() => handleJoinRequestAction(item.id, 2)}
+                          />
+                        </div>
+                      );
+                    }}
+                 />
+               ) : (
+                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无申请记录" />
+               )}
+            </Card>
+          )}
+
+          {/* Members Grid */}
+          <div>
+             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+                <Title level={4} style={{ margin: 0 }}>群成员</Title>
+                <Tag style={{ fontSize: 14, padding: '4px 10px', borderRadius: 12 }}>{memberCount} / {maxMembers}</Tag>
+             </div>
+             
+             <Row gutter={[16, 16]}>
                {sortedMembers.map(m => {
                  const u = getUser(m.userId);
                  const isMe = m.userId === currentUser?.id;
                  return (
-                   <Col span={6} xl={4} xxl={3} key={m.userId}>
+                   <Col xs={12} sm={8} md={6} lg={4} xl={4} xxl={3} key={m.userId}>
                      <GroupMemberItem 
                        member={m}
                        user={u}
-                       currentUser={currentUser}
-                       isOwner={isOwner}
+                       isOwner={canManageGroup}
                        isMe={isMe}
                        onKick={handleKick}
                        navigate={navigate}
@@ -523,48 +757,6 @@ const Contacts = () => {
         </div>
       </div>
     );
-  };
-
-  const renderFriendNotifications = () => {
-     return (
-        <div style={{ padding: 32 }}>
-           <Title level={3}>好友通知</Title>
-           {friendRequests.length === 0 ? <Empty description="暂无新通知" /> : (
-              <List
-                dataSource={friendRequests}
-                renderItem={item => {
-                  const u = getUser(item.userId);
-                  const isPending = item.status === 0;
-                  return (
-                    <Card style={{ marginBottom: 16, borderRadius: 16 }}>
-                       <List.Item
-                         actions={isPending ? [
-                           <Button type="primary" onClick={() => handleAcceptFriend(item.id)}>同意</Button>,
-                           <Button>忽略</Button>
-                         ] : [<Text type="secondary">已处理</Text>]}
-                       >
-                         <List.Item.Meta
-                           avatar={<Avatar src={u?.avatar} size="large" />}
-                           title={u?.nickname || u?.username}
-                           description={item.remark || '请求添加你为好友'}
-                         />
-                       </List.Item>
-                    </Card>
-                  )
-                }}
-              />
-           )}
-        </div>
-     )
-  };
-
-  const renderGroupNotifications = () => {
-     return (
-        <div style={{ padding: 32 }}>
-           <Title level={3}>群通知</Title>
-           <Empty description="暂无群通知" />
-        </div>
-     )
   };
 
   // Add Menu
@@ -610,33 +802,6 @@ const Contacts = () => {
               </Dropdown>
            </div>
            
-           <div style={{ padding: '0 16px', marginBottom: 16 }}>
-              <div 
-                 onClick={() => setSelectedItem({ type: 'notify_friend' })}
-                 style={{ 
-                   padding: '10px 12px', cursor: 'pointer', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 12,
-                   background: selectedItem?.type === 'notify_friend' ? '#e0f2fe' : 'transparent',
-                   color: selectedItem?.type === 'notify_friend' ? '#0284c7' : '#334155'
-                 }}
-              >
-                 <Badge count={friendRequests.filter(r => r.status === 0).length} size="small">
-                    <Avatar style={{ background: '#f59e0b' }} icon={<BellOutlined />} size="small" />
-                 </Badge>
-                 <Text strong inherit>好友通知</Text>
-              </div>
-              <div 
-                 onClick={() => setSelectedItem({ type: 'notify_group' })}
-                 style={{ 
-                   padding: '10px 12px', cursor: 'pointer', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 12, marginTop: 4,
-                   background: selectedItem?.type === 'notify_group' ? '#e0f2fe' : 'transparent',
-                   color: selectedItem?.type === 'notify_group' ? '#0284c7' : '#334155'
-                 }}
-              >
-                 <Avatar style={{ background: '#8b5cf6' }} icon={<NotificationOutlined />} size="small" />
-                 <Text strong inherit>群通知</Text>
-              </div>
-           </div>
-
            <Tabs 
              activeKey={activeTab} 
              onChange={setActiveTab} 
@@ -647,12 +812,15 @@ const Contacts = () => {
                  key: 'friends',
                  label: '好友',
                  children: (
-                   <div style={{ height: 'calc(100vh - 260px)', overflowY: 'auto', padding: '12px 0' }}>
+                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
                      <List
                        dataSource={filteredFriends}
                        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
                        renderItem={item => {
-                         const u = getUser(item.friendId);
+                         let u = getUser(item.friendId);
+                         if (item.isSelf && currentUser) {
+                           u = currentUser;
+                         }
                          const isSelected = selectedItem?.type === 'friend' && selectedItem?.data.friendId === item.friendId;
                          return (
                            <div style={{ padding: '4px 12px' }}>
@@ -685,7 +853,7 @@ const Contacts = () => {
                  key: 'groups',
                  label: '群组',
                  children: (
-                   <div style={{ height: 'calc(100vh - 260px)', overflowY: 'auto', padding: '12px 0' }}>
+                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
                       <List
                        dataSource={filteredGroups}
                        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
@@ -726,8 +894,6 @@ const Contacts = () => {
            {selectedItem ? (
              selectedItem.type === 'friend' ? renderFriendDetail(selectedItem.data) :
              selectedItem.type === 'group' ? renderGroupDetail(selectedItem.data) :
-             selectedItem.type === 'notify_friend' ? renderFriendNotifications() :
-             selectedItem.type === 'notify_group' ? renderGroupNotifications() :
              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未知类型" style={{ marginTop: 100 }} />
            ) : (
              <Empty 
@@ -755,13 +921,20 @@ const Contacts = () => {
           <Form.Item name="description" label="群描述">
             <Input.TextArea placeholder="介绍一下这个群..." />
           </Form.Item>
+          <Form.Item name="maxMembers" label="最大人数">
+            <InputNumber min={2} max={2000} placeholder="默认 200" style={{ width: '100%' }} />
+          </Form.Item>
         </Form>
       </Modal>
 
       <Modal
         title="邀请好友入群"
         open={isInviteOpen}
-        onCancel={() => setIsInviteOpen(false)}
+        onCancel={() => {
+          setIsInviteOpen(false);
+          setInviteFriendId(null);
+          setInviteMessage('');
+        }}
         onOk={handleInvite}
         okButtonProps={{ disabled: !inviteFriendId }}
       >
@@ -792,6 +965,17 @@ const Contacts = () => {
             );
           }}
         />
+        <div style={{ marginTop: 16 }}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>邀请留言（可选）</Text>
+          <Input.TextArea
+            placeholder="例如：一起来聊聊吧..."
+            value={inviteMessage}
+            onChange={(e) => setInviteMessage(e.target.value)}
+            maxLength={50}
+            showCount
+            autoSize={{ minRows: 2, maxRows: 3 }}
+          />
+        </div>
       </Modal>
     </MainLayout>
   );

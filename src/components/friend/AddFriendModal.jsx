@@ -33,7 +33,7 @@ const AddFriendModal = ({ open, targetUser, onCancel, onSubmit, submitting }) =>
             <Input.TextArea
               placeholder="例如：你好，我是..."
               autoSize={{ minRows: 3, maxRows: 6 }}
-              maxLength={120}
+              maxLength={100}
               showCount
             />
           </Form.Item>

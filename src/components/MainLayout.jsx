@@ -150,11 +150,36 @@ const MainLayout = ({ pageTitle, children }) => {
           hasMore = res.hasMore;
           skip += list.length;
           if (list.length === 0) break;
-          // ... (simplified for brevity, logic remains same as original for batch updating meta)
-          // We rely on sessionStore update to trigger unreadTotal update
+          
+          list.forEach(msg => {
+             // Re-use logic from WS handler
+             const isGroup = msg.type === 'group_chat' || msg.groupId;
+             const payload = msg;
+             const id = isGroup ? payload.groupId : (payload.fromUserId === String(user.id) ? payload.toUserId : payload.fromUserId);
+             if (!id) return;
+
+             const sessionKey = isGroup ? getGroupSessionKey(id) : getFriendSessionKey(id);
+             const createdAt = payload.createdAt || Date.now() / 1000;
+             const rawContent = payload.content ?? '';
+             const content = payload.contentType === 2 ? '[图片]' : payload.contentType === 3 ? '[文件]' : rawContent;
+             const seq = payload.seq;
+             const isIncoming = String(payload.fromUserId) !== String(user.id);
+             
+             if (isIncoming) {
+                updateSessionMeta(sessionKey, (prev) => ({
+                  ...prev,
+                  lastAt: Math.max(prev.lastAt || 0, createdAt),
+                  lastMessage: content,
+                  lastSeq: isGroup && Number.isFinite(seq) ? Math.max(prev.lastSeq || 0, seq) : (prev.lastSeq || 0),
+                  unread: (prev.unread || 0) + 1,
+                }));
+             }
+          });
         } catch (e) { break; }
       }
     };
+
+    fetchOfflineMessages(0);
 
     const unsubscribe = wsClient.subscribe((msg) => {
       // Handle connection status
@@ -171,22 +196,37 @@ const MainLayout = ({ pageTitle, children }) => {
           return;
       }
 
-      if (location.pathname.startsWith('/chat')) return; // Chat page handles its own logic
-
       if (msg?.type === 'chat' || msg?.type === 'group_chat') {
         const isGroup = msg.type === 'group_chat';
+        const payload = msg.data || msg;
         const id = isGroup ? payload.groupId : (payload.fromUserId === String(user.id) ? payload.toUserId : payload.fromUserId);
         if (!id) return;
 
         const sessionKey = isGroup ? getGroupSessionKey(id) : getFriendSessionKey(id);
         const createdAt = payload.createdAt || Date.now() / 1000;
-        const content = payload.content ?? '';
+        
+        // Format content for preview
+        const rawContent = payload.content ?? '';
+        const content = payload.contentType === 2 ? '[图片]' : payload.contentType === 3 ? '[文件]' : rawContent;
+        
         const seq = payload.seq;
         const isIncoming = String(payload.fromUserId) !== String(user.id);
         
         let shouldCount = isIncoming;
         // Simple heuristic for offline/push ignore (reuse ref logic if needed or simplify)
         if (shouldCount && createdAt < (startupTimeRef.current - 2)) shouldCount = false;
+
+        // Check if user is currently viewing this chat
+        if (location.pathname.startsWith('/chat')) {
+           const searchParams = new URLSearchParams(location.search);
+           const currentType = searchParams.get('type');
+           const currentId = searchParams.get('id');
+           const msgType = isGroup ? 'group' : 'friend';
+           
+           if (currentType === msgType && String(currentId) === String(id)) {
+              shouldCount = false;
+           }
+        }
 
         updateSessionMeta(sessionKey, (prev) => ({
           ...prev,

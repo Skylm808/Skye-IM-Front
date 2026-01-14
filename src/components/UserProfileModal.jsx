@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Avatar, Descriptions, Modal, Result, Skeleton, Space, Tag, Typography } from 'antd';
-import { UserOutlined } from '@ant-design/icons';
+import { Avatar, Button, Descriptions, Modal, Result, Skeleton, Space, Tag, Typography } from 'antd';
+import { UserOutlined, MessageOutlined } from '@ant-design/icons';
 import { getUserById } from '../api/user';
 
 const { Text } = Typography;
@@ -18,7 +18,7 @@ const formatCreatedAt = (createdAt) => {
   return new Date(Number(createdAt) * 1000).toLocaleString();
 };
 
-const UserProfileModal = ({ open, userId, onClose }) => {
+const UserProfileModal = ({ open, userId, currentUserId, onClose, onSendMessage }) => {
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [error, setError] = useState('');
@@ -27,6 +27,8 @@ const UserProfileModal = ({ open, userId, onClose }) => {
     if (!user) return '用户资料';
     return user.nickname ? `${user.nickname}（${user.username}）` : user.username;
   }, [user]);
+
+  const isSelf = String(userId) === String(currentUserId);
 
   useEffect(() => {
     if (!open || !userId) return;
@@ -52,7 +54,25 @@ const UserProfileModal = ({ open, userId, onClose }) => {
   }, [open, userId]);
 
   return (
-    <Modal title={title} open={open} onCancel={onClose} onOk={onClose} okText="关闭" cancelButtonProps={{ style: { display: 'none' } }}>
+    <Modal 
+      title={title} 
+      open={open} 
+      onCancel={onClose} 
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={onClose}>关闭</Button>
+          {user && onSendMessage && (
+            <Button 
+              type="primary" 
+              icon={<MessageOutlined />} 
+              onClick={() => onSendMessage(user)}
+            >
+              {isSelf ? '发消息给自己' : '发消息'}
+            </Button>
+          )}
+        </div>
+      }
+    >
       {loading ? (
         <Skeleton active paragraph={{ rows: 6 }} />
       ) : error ? (

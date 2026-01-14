@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import { Layout, List, Avatar, Input, Typography, Button, Space, Badge, Empty, Spin, theme, Tabs, Modal, Form, message, Tooltip, Dropdown, Drawer, Descriptions, Tag, Image, Upload } from 'antd';
+import { Layout, List, Avatar, Input, InputNumber, Typography, Button, Space, Badge, Empty, Spin, theme, Tabs, Modal, Form, message, Tooltip, Dropdown, Drawer, Descriptions, Tag, Image, Upload } from 'antd';
 import { SendOutlined, UserOutlined, PictureOutlined, TeamOutlined, PlusOutlined, MessageOutlined, MoreOutlined, SearchOutlined, BellOutlined, UserAddOutlined, DeleteOutlined, ExclamationCircleOutlined, FileOutlined, PaperClipOutlined, CloudDownloadOutlined, CloseOutlined, UploadOutlined, EditOutlined, LogoutOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import SearchAddModal from '../components/SearchAddModal';
 import GlobalSearchBox from '../components/GlobalSearchBox';
+import GroupRequestsModal from '../components/group/GroupRequestsModal';
+import UserProfileModal from '../components/UserProfileModal';
 import { friendApi } from '../api/friend';
 import { messageApi } from '../api/message';
 import { groupApi } from '../api/group';
@@ -113,6 +115,18 @@ const sortMessages = (list, chatType) => {
     });
   }
   return deduped.sort((a, b) => (a?.createdAt || 0) - (b?.createdAt || 0));
+};
+
+const touchSession = (type, id, msg) => {
+  if (!msg) return;
+  const key = type === 'friend' ? getFriendSessionKey(id) : getGroupSessionKey(id);
+  const text = msg.contentType === 2 ? '[图片]' : msg.contentType === 3 ? '[文件]' : msg.content;
+  
+  updateSessionMeta(key, (prev) => ({
+    ...prev,
+    lastAt: msg.createdAt || Date.now() / 1000,
+    lastMessage: text,
+  }));
 };
 
 const Chat = () => {
@@ -376,8 +390,11 @@ const Chat = () => {
   const [searchTab, setSearchTab] = useState('user');
   const [isCreateGroupModalOpen, setIsCreateGroupModalOpen] = useState(false);
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isGroupRequestsOpen, setIsGroupRequestsOpen] = useState(false);
   const [inviteFriendId, setInviteFriendId] = useState(null);
   const [inviteMessage, setInviteMessage] = useState('');
+  
+  const [profileUserId, setProfileUserId] = useState(null);
 
   const [createGroupForm] = Form.useForm();
   
@@ -439,7 +456,10 @@ const Chat = () => {
 
       const success = wsClient.send({ type, data: msgData });
       if (!success) {
-         message.error('连接断开，发送失败');
+         message.error('连接断开，正在尝试重连...');
+         if (!wsClient.isConnected) {
+            wsClient.connect();
+         }
          return;
       }
       
@@ -486,22 +506,51 @@ const Chat = () => {
     }
   }, [messages]);
 
-  const fetchSessions = useCallback(async () => {
+  const fetchSessions = useCallback(async (userOverride) => {
     try {
+      const user = userOverride || currentUser;
       const [friendRes, groupRes] = await Promise.all([
         friendApi.getFriendList(1, 100),
         groupApi.getList(1, 100)
       ]);
       
       const friends = (friendRes.list || []).map(f => ({ ...f, type: 'friend', key: `f-${f.friendId}`, unread: 0, lastAt: 0, lastMessage: '' }));
-      const groups = (groupRes.list || []).map(g => ({ ...g, type: 'group', key: `g-${g.groupId}`, unread: 0, lastAt: 0, lastMessage: '', lastSeq: 0 }));
+      // Filter out dismissed groups (status === 2)
+      const groups = (groupRes.list || [])
+        .filter(g => g.status !== 2)
+        .map(g => ({ ...g, type: 'group', key: `g-${g.groupId}`, unread: 0, lastAt: 0, lastMessage: '', lastSeq: 0 }));
       
       setFriendsList(friends); // Keep raw friend list for invite modal
 
       await ensureUsers(friends.map(f => f.friendId));
       
-      const sessions = [...friends, ...groups];
+      let sessions = [...friends, ...groups];
+      
       const meta = loadSessionsMeta();
+      
+      // Inject Self Session if exists in meta or is forced
+      if (user) {
+          const selfKey = `f-${user.id}`;
+          const selfMeta = meta[selfKey];
+          // If we have history for self, add it
+          if (selfMeta && (selfMeta.lastMessage || selfMeta.lastAt)) {
+             // Check if already in friends (unlikely for self)
+             if (!sessions.some(s => s.key === selfKey)) {
+                 sessions.push({
+                    type: 'friend',
+                    friendId: user.id,
+                    key: selfKey,
+                    unread: 0,
+                    lastAt: 0,
+                    lastMessage: '',
+                    remark: user.nickname || user.username || '我',
+                    avatar: user.avatar,
+                    isSelf: true
+                 });
+             }
+          }
+      }
+
       setSessionList(prev => {
         const prevMap = new Map((prev || []).map(s => [s.key, s]));
         return sessions.map(s => {
@@ -521,46 +570,13 @@ const Chat = () => {
       console.error('Failed to fetch sessions', e);
       return { friends: [], groups: [] };
     }
-  }, [ensureUsers]);
+  }, [ensureUsers, currentUser]);
 
   useEffect(() => {
     return () => {
       pendingAckTimersRef.current.forEach((t) => clearTimeout(t));
       pendingAckTimersRef.current.clear();
     };
-  }, []);
-
-  const touchSession = useCallback((type, id, msg) => {
-    const createdAt = msg?.createdAt || Date.now() / 1000;
-    // Format content for preview based on type
-    const rawContent = msg?.content ?? '';
-    const content = msg?.contentType === 2 ? '[图片]' : msg?.contentType === 3 ? '[文件]' : rawContent;
-    const seq = msg?.seq;
-
-    setSessionList(prev => prev.map(s => {
-      if (type === 'friend' && s.type === 'friend' && String(s.friendId) === String(id)) {
-        if ((s.lastAt || 0) > createdAt) return s;
-        return { ...s, lastAt: createdAt, lastMessage: content };
-      }
-      if (type === 'group' && s.type === 'group' && String(s.groupId) === String(id)) {
-        const next = { ...s };
-        if ((next.lastAt || 0) <= createdAt) {
-          next.lastAt = createdAt;
-          next.lastMessage = content;
-        }
-        if (Number.isFinite(seq) && (next.lastSeq || 0) < seq) next.lastSeq = seq;
-        return next;
-      }
-      return s;
-    }));
-
-    const sessionKey = type === 'friend' ? getFriendSessionKey(id) : getGroupSessionKey(id);
-    updateSessionMeta(sessionKey, (prev) => ({
-      ...prev,
-      lastAt: Math.max(prev.lastAt || 0, createdAt),
-      lastMessage: content,
-      lastSeq: Number.isFinite(seq) ? Math.max(prev.lastSeq || 0, seq) : (prev.lastSeq || 0),
-    }));
   }, []);
 
   const upsertMessage = useCallback((incoming, chatType) => {
@@ -601,27 +617,63 @@ const Chat = () => {
     pendingAckTimersRef.current.set(key, timer);
   }, []);
 
-  // Init
+  // Init Data (User & Sessions) - Run once
   useEffect(() => {
-    const init = async () => {
+    const initData = async () => {
       try {
         const userRes = await getUserInfo();
-        setCurrentUser(userRes.user || userRes);
-        await fetchSessions();
-        
-        const type = searchParams.get('type');
-        const id = searchParams.get('id');
-        if (type && id) {
-          if (type === 'friend' || type === 'group') {
-             setActiveChat({ type, id: type === 'group' ? id : Number(id) });
-          }
-        }
+        const user = userRes.user || userRes;
+        setCurrentUser(user);
+        await fetchSessions(user);
       } catch (error) {
         console.error('Init failed:', error);
       }
     };
-    init();
-  }, [fetchSessions, searchParams]);
+    initData();
+  }, []);
+
+  // Handle URL Params
+  useEffect(() => {
+    const type = searchParams.get('type');
+    const rawId = searchParams.get('id');
+    
+    if (type && rawId && (type === 'friend' || type === 'group')) {
+       const id = type === 'group' ? rawId : Number(rawId);
+       
+       setActiveChat(prev => {
+          if (prev && prev.type === type && String(prev.id) === String(id)) {
+             return prev;
+          }
+          return { type, id };
+       });
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!activeChat || !currentUser) return;
+
+    // Special handling for "Self" chat (File Transfer Assistant)
+    if (activeChat.type === 'friend' && String(activeChat.id) === String(currentUser.id)) {
+      setSessionList(prev => {
+        const exists = prev.find(s => s.type === 'friend' && String(s.friendId) === String(currentUser.id));
+        if (exists) return prev;
+
+        // Create a synthetic session for self
+        const selfSession = {
+          type: 'friend',
+          friendId: currentUser.id,
+          key: `f-${currentUser.id}`,
+          unread: 0,
+          lastAt: Date.now() / 1000,
+          lastMessage: '',
+          remark: currentUser.nickname || currentUser.username || '我',
+          avatar: currentUser.avatar,
+          isSelf: true // marker
+        };
+        return [selfSession, ...prev];
+      });
+    }
+  }, [activeChat, currentUser]);
 
   useEffect(() => {
     const unsubscribe = onSessionsUpdated((meta) => {
@@ -645,10 +697,14 @@ const Chat = () => {
     const handleWsMessage = (msg) => {
       if (msg.type === 'status') {
         setWsStatus(msg.status);
-      } else if (msg.type === 'chat') {
+      } else if (msg.type === 'message') {
         handlePrivateMessage(msg);
-      } else if (msg.type === 'group_chat') {
+      } else if (msg.type === 'group_message') {
         handleGroupMessage(msg);
+      } else if (msg.type === 'friend_request') {
+        message.info(`收到好友请求: ${msg.data?.message || ''}`);
+      } else if (msg.type === 'group_invitation') {
+        message.info(`收到入群邀请: ${msg.data?.message || ''}`);
       } else if (msg.type === 'ack') {
         handleAck(msg);
       } else if (msg.type === 'error') {
@@ -670,31 +726,11 @@ const Chat = () => {
     const fromId = String(data.fromUserId || data.senderId);
     const toId = String(data.toUserId);
     const peerId = fromId === myId ? toId : fromId;
-    const isFromMe = fromId === myId;
-    const createdAt = data.createdAt || Date.now() / 1000;
-    const isNewMessage = createdAt > (startupTimeRef.current - 2);
-
-    touchSession('friend', peerId, data);
 
     if (activeChat?.type === 'friend' && String(activeChat.id) === String(peerId)) {
       upsertMessage(data, 'friend');
       messageApi.markRead(activeChat.id).catch(() => {});
       shouldScrollToBottomRef.current = true;
-    } else {
-      // Don't count my own outgoing messages as unread.
-      if (!isFromMe) {
-        setSessionList(prev => prev.map(s => {
-          if (s.type === 'friend' && String(s.friendId) === String(peerId)) {
-            // Only increment if it's a new message
-            return { ...s, unread: isNewMessage ? (s.unread || 0) + 1 : (s.unread || 0) };
-          }
-          return s;
-        }));
-        updateSessionMeta(getFriendSessionKey(peerId), (prev) => ({ 
-           ...prev, 
-           unread: isNewMessage ? (prev.unread || 0) + 1 : (prev.unread || 0) 
-        }));
-      }
     }
   };
 
@@ -702,13 +738,7 @@ const Chat = () => {
     const raw = msg.data || msg;
     const data = normalizeGroupMessage(raw);
     const groupIdStr = String(data.groupId);
-    const isFromMe = String(data.fromUserId) === String(currentUser?.id);
-    const createdAt = data.createdAt || Date.now() / 1000;
-    const isNewMessage = createdAt > (startupTimeRef.current - 2);
-    const isAtMe = !!data.isAtMe;
 
-    touchSession('group', groupIdStr, data);
-    
     if (activeChat?.type === 'group' && String(activeChat.id) === groupIdStr) {
         const lastSeq = lastGroupSeqRef.current[groupIdStr] || 0;
         if (Number.isFinite(data?.seq) && lastSeq && data.seq > lastSeq + 1) {
@@ -724,24 +754,6 @@ const Chat = () => {
         upsertMessage(data, 'group');
         ensureUsers([data.fromUserId]);
         shouldScrollToBottomRef.current = true;
-    } else {
-        // Don't count my own outgoing messages as unread.
-        if (!isFromMe) {
-          if (isAtMe) {
-            message.info('You were mentioned in a group.');
-          }
-          setSessionList(prev => prev.map(s => {
-           if (s.type === 'group' && String(s.groupId) === groupIdStr) {
-             // Only increment if new
-             return { ...s, unread: isNewMessage ? (s.unread || 0) + 1 : (s.unread || 0) };
-           }
-           return s;
-         }));
-          updateSessionMeta(getGroupSessionKey(groupIdStr), (prev) => ({ 
-             ...prev, 
-             unread: isNewMessage ? (prev.unread || 0) + 1 : (prev.unread || 0) 
-          }));
-        }
     }
   };
 
@@ -853,6 +865,27 @@ const Chat = () => {
         shouldScrollToBottomRef.current = true;
       } catch (error) {
         console.error('Failed to load history:', error);
+        
+        const status = error.response?.status;
+        // Handle 403 (Kicked), 404 (Not Found), 400 (Bad Request)
+        if (status === 403 || status === 404 || status === 400) {
+           const map = {
+             403: '您已不再是该群组成员或无权访问',
+             404: '群组/会话不存在',
+             400: '请求无效',
+           };
+           message.warning(map[status] || '无法访问该会话');
+           
+           // Remove from session list locally
+           setSessionList(prev => prev.filter(s => {
+             if (activeChat.type === 'group') return !(s.type === 'group' && String(s.groupId) === String(activeChat.id));
+             // For friend, maybe they deleted us? Keep it but clear chat.
+             return true; 
+           }));
+           
+           setActiveChat(null);
+           navigate('/chat'); // Clear URL params
+        }
       } finally {
         setLoadingHistory(false);
       }
@@ -860,7 +893,7 @@ const Chat = () => {
 
     loadHistory();
     setIsDetailOpen(false); 
-  }, [activeChat, ensureUsers]);
+  }, [activeChat, ensureUsers, navigate]);
 
   useEffect(() => {
     if (!activeChat || activeChat.type !== 'group') return;
@@ -904,15 +937,17 @@ const Chat = () => {
     if (inputValue.trim()) {
       const content = inputValue;
       try {
-        if (activeChat.type === 'friend') {
+          if (activeChat.type === 'friend') {
           const msgId = createClientMsgId();
           const msgData = { msgId, toUserId: Number(activeChat.id), content, contentType: 1 };
           const success = wsClient.send({ type: 'chat', data: msgData });
           if (success) {
             const optimisticMsg = { ...msgData, fromUserId: currentUser.id, createdAt: Date.now() / 1000, localStatus: 'sending' };
-            touchSession('friend', activeChat.id, optimisticMsg);
             upsertMessage(optimisticMsg, 'friend');
             scheduleAckTimeout(msgId);
+          } else {
+             message.error('连接断开，正在尝试重连...');
+             if (!wsClient.isConnected) wsClient.connect();
           }
         } else {
           const groupId = String(activeChat.id);
@@ -953,10 +988,12 @@ const Chat = () => {
           const success = wsClient.send({ type: 'group_chat', data: msgData });
           if (success) {
             const optimisticMsg = { ...msgData, fromUserId: currentUser.id, createdAt: Date.now() / 1000, localStatus: 'sending' };
-            touchSession('group', activeChat.id, optimisticMsg);
             upsertMessage(optimisticMsg, 'group');
             scheduleAckTimeout(msgId);
             setAtTargets([]);
+          } else {
+             message.error('连接断开，正在尝试重连...');
+             if (!wsClient.isConnected) wsClient.connect();
           }
         }
         setInputValue('');
@@ -1000,11 +1037,13 @@ const Chat = () => {
 
   const handleCreateGroup = async (values) => {
     try {
-      const res = await groupApi.create({
+      const payload = {
         name: values.name,
         description: values.description,
         avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=' + values.name
-      });
+      };
+      if (values.maxMembers) payload.maxMembers = Number(values.maxMembers);
+      const res = await groupApi.create(payload);
       setIsCreateGroupModalOpen(false);
       createGroupForm.resetFields();
       message.success('创建成功');
@@ -1090,6 +1129,7 @@ const Chat = () => {
       if (values.name) params.name = values.name;
       if (values.avatar) params.avatar = values.avatar;
       if (values.description) params.description = values.description;
+      if (values.maxMembers) params.maxMembers = Number(values.maxMembers);
 
       console.log('Updating group with params:', params);
       
@@ -1185,12 +1225,33 @@ const Chat = () => {
     if (activeChat.type === 'friend') {
       const u = getUser(activeChat.id);
       return (
-        <div style={{ textAlign: 'center', padding: 20 }}>
-           <Avatar src={u?.avatar} size={100} style={{ marginBottom: 16 }} />
-           <Title level={4}>{activeInfo.name}</Title>
-           <Text type="secondary">{u?.username}</Text>
-           <div style={{ marginTop: 40 }}>
-             <Button danger block icon={<DeleteOutlined />}>删除好友</Button>
+        <div style={{ padding: 24, textAlign: 'center' }}>
+           <div style={{ 
+             background: '#fff', 
+             borderRadius: 24, 
+             padding: 32, 
+             boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
+             border: '1px solid #f1f5f9' 
+           }}>
+             <Avatar 
+               src={u?.avatar} 
+               size={120} 
+               style={{ marginBottom: 20, border: '4px solid #fff', boxShadow: '0 8px 16px rgba(0,0,0,0.1)' }} 
+             />
+             <Title level={3} style={{ marginBottom: 4, color: '#1e293b' }}>{activeInfo.name}</Title>
+             <Text type="secondary" style={{ fontSize: 16 }}>@{u?.username}</Text>
+             
+             <div style={{ marginTop: 40, display: 'flex', flexDirection: 'column', gap: 12 }}>
+               <Button 
+                 danger 
+                 size="large" 
+                 block 
+                 icon={<DeleteOutlined />} 
+                 style={{ borderRadius: 12, height: 48 }}
+               >
+                 删除好友
+               </Button>
+             </div>
            </div>
         </div>
       );
@@ -1203,69 +1264,112 @@ const Chat = () => {
       const canManage = canManageMember(myRole);
 
       return (
-        <div style={{ padding: '0 6px' }}>
+        <div style={{ padding: '20px' }}>
           {/* Header Info */}
-          <div style={{ textAlign: 'center', marginBottom: 20, padding: '10px 0', borderBottom: '1px solid #f0f0f0' }}>
-            <Avatar 
-              shape="square" 
-              src={g?.avatar} 
-              size={80} 
+          <div style={{ 
+            textAlign: 'center', 
+            marginBottom: 24, 
+            padding: '24px', 
+            background: '#fff',
+            borderRadius: 20,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+            border: '1px solid #f1f5f9'
+          }}>
+            <Avatar
+              shape="square"
+              src={g?.avatar}
+              size={88}
               icon={<TeamOutlined />}
-              style={{ borderRadius: 12, marginBottom: 12, border: '1px solid #f0f0f0' }} 
+              style={{ borderRadius: 20, marginBottom: 16, border: '1px solid #f1f5f9' }}
             />
-            <Title level={5} style={{ marginBottom: 4 }}>{g?.name || '群聊'}</Title>
-            <Text type="secondary" style={{ fontSize: 12 }}>ID: {g?.groupId || activeChat.id}</Text>
-            
-            <div style={{ marginTop: 12, display: 'flex', justifyContent: 'center', gap: 8 }}>
-               <Tag color="blue">{roleLabel(myRole)}</Tag>
-               <Tag icon={<TeamOutlined />}>{groupMembers.length || g?.memberCount || 0} 成员</Tag>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Title level={4} style={{ margin: 0, color: '#0f172a' }}>{g?.name || '群聊'}</Title>
+                <Tag color={myRole === 1 ? 'gold' : myRole === 2 ? 'blue' : 'default'} bordered={false} style={{ margin: 0 }}>
+                  {roleLabel(myRole)}
+                </Tag>
+              </div>
+              <Text type="secondary" style={{ fontSize: 13 }}>ID: {g?.groupId || activeChat.id}</Text>
             </div>
-            
+
+            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center', gap: 12 }}>
+               <div style={{ background: '#f8fafc', padding: '6px 16px', borderRadius: 20 }}>
+                 <Text type="secondary" style={{ fontSize: 12 }}>
+                   <TeamOutlined style={{ marginRight: 6 }} />
+                   {groupMembers.length || g?.memberCount || 0} 成员
+                 </Text>
+               </div>
+               {Number.isFinite(g?.maxMembers) && (
+                 <div style={{ background: '#f8fafc', padding: '6px 16px', borderRadius: 20 }}>
+                   <Text type="secondary" style={{ fontSize: 12 }}>上限 {g.maxMembers}</Text>
+                 </div>
+               )}
+            </div>
+
             {g?.description && (
-              <div style={{ marginTop: 12, padding: '8px 12px', background: '#fafafa', borderRadius: 8, fontSize: 12, color: '#666', textAlign: 'left' }}>
-                 <Text type="secondary">公告: </Text>
-                 {g.description}
+              <div style={{ marginTop: 20, padding: '12px 16px', background: '#f8fafc', borderRadius: 12, fontSize: 13, color: '#475569', textAlign: 'left', lineHeight: 1.6 }}>
+                {g.description}
               </div>
             )}
           </div>
 
           {/* Action Buttons */}
-          <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-            <Button type="primary" ghost block icon={<PlusOutlined />} onClick={() => setIsInviteOpen(true)}>
-              邀请
-            </Button>
-            <Button
-              block
-              disabled={!canManage}
-              icon={<EditOutlined />}
-              onClick={() => {
-                editGroupForm.setFieldsValue({
-                  name: g?.name,
-                  avatar: g?.avatar,
-                  description: g?.description,
-                });
-                setIsEditGroupOpen(true);
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
+            <Button 
+              type="primary" 
+              size="large" 
+              icon={<UserAddOutlined />} 
+              onClick={() => setIsInviteOpen(true)} 
+              style={{ 
+                borderRadius: 12, 
+                height: 44, 
+                boxShadow: '0 4px 12px rgba(14, 165, 233, 0.2)',
+                width: '100%'
               }}
             >
-              设置
+              邀请好友
             </Button>
+            
+            {canManage && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <Button 
+                  size="large" 
+                  onClick={() => setIsGroupRequestsOpen(true)} 
+                  style={{ borderRadius: 12, height: 44 }}
+                >
+                  入群申请
+                </Button>
+                <Button
+                  size="large"
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    editGroupForm.setFieldsValue({
+                      name: g?.name,
+                      avatar: g?.avatar,
+                      description: g?.description,
+                      maxMembers: g?.maxMembers,
+                    });
+                    setIsEditGroupOpen(true);
+                  }}
+                  style={{ borderRadius: 12, height: 44 }}
+                >
+                  设置
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Members List */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, padding: '0 4px' }}>
-               <Text strong>成员列表</Text>
-               <Text type="secondary" style={{ fontSize: 12 }}>{sortedMembers.length} 人</Text>
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, padding: '0 4px' }}>
+               <Text strong style={{ fontSize: 16, color: '#334155' }}>成员列表</Text>
             </div>
             
-            <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0', overflow: 'hidden' }}>
-              <List
-                loading={loadingDetail}
-                dataSource={sortedMembers}
-                size="small"
-                pagination={{ pageSize: 10, simple: true, size: 'small', style: { textAlign: 'center', marginBottom: 12 } }}
-                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无成员数据" /> }}
-                renderItem={(m) => {
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {sortedMembers.length === 0 ? (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无成员数据" />
+              ) : (
+                sortedMembers.slice(0, 50).map((m) => { // Limit render for perf, maybe add pagination later if needed
                   const memberId = m.userId;
                   const u = getUser(memberId);
                   const isSelf = String(memberId) === String(currentUser?.id);
@@ -1281,13 +1385,43 @@ const Chat = () => {
                   ].filter(Boolean);
 
                   return (
-                    <List.Item
-                      actions={items.length ? [
-                         <Dropdown
-                           key="more"
+                    <div
+                      key={memberId}
+                      style={{ 
+                        padding: '10px 12px', 
+                        background: '#fff',
+                        borderRadius: 12,
+                        border: '1px solid #f1f5f9',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; e.currentTarget.style.borderColor = '#f1f5f9'; }}
+                      onClick={() => setProfileUserId(memberId)}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
+                         <Avatar src={u?.avatar} icon={<UserOutlined />} style={{ border: '1px solid #f1f5f9', flexShrink: 0 }} />
+                         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                               <Text style={{ fontSize: 14, fontWeight: 500, color: '#1e293b' }} ellipsis>
+                                 {u?.nickname || u?.username || `User ${memberId}`}
+                               </Text>
+                               {memberRole === 1 && <Tag color="gold" style={{ margin: 0, padding: '0 6px', fontSize: 10, lineHeight: '18px', borderRadius: 10, border: 'none', flexShrink: 0 }}>群主</Tag>}
+                               {memberRole === 2 && <Tag color="blue" style={{ margin: 0, padding: '0 6px', fontSize: 10, lineHeight: '18px', borderRadius: 10, border: 'none', flexShrink: 0 }}>管理员</Tag>}
+                            </div>
+                            {isMuted && <Text type="danger" style={{ fontSize: 11 }}>已禁言</Text>}
+                         </div>
+                      </div>
+
+                      {items.length > 0 && (
+                        <Dropdown
                            menu={{
                              items,
-                             onClick: async ({ key }) => {
+                             onClick: async ({ key, domEvent }) => {
+                               domEvent.stopPropagation();
                                try {
                                  if (key === 'kick') {
                                    Modal.confirm({
@@ -1295,9 +1429,15 @@ const Chat = () => {
                                      icon: <ExclamationCircleOutlined />,
                                      content: `确认将 ${u?.nickname || memberId} 踢出群组？`,
                                      onOk: async () => {
-                                       await groupApi.kick(String(activeChat.id), memberId);
-                                       message.success('已踢出');
-                                       fetchDetailInfo();
+                                       try {
+                                          await groupApi.kick(String(activeChat.id), memberId);
+                                          message.success('已踢出');
+                                          setGroupMembers(prev => prev.filter(m => String(m.userId) !== String(memberId)));
+                                          setTimeout(fetchDetailInfo, 300);
+                                       } catch (e) {
+                                          console.error(e);
+                                          message.error('踢出失败');
+                                       }
                                      },
                                    });
                                  } else if (key === 'mute' || key === 'unmute') {
@@ -1321,38 +1461,29 @@ const Chat = () => {
                            }}
                            trigger={['click']}
                          >
-                           <Button type="text" size="small" icon={<MoreOutlined />} />
+                           <Button type="text" size="small" icon={<MoreOutlined style={{ fontSize: 16, color: '#94a3b8' }} />} onClick={(e) => e.stopPropagation()} />
                          </Dropdown>
-                      ] : []}
-                      style={{ padding: '8px 12px' }}
-                    >
-                      <List.Item.Meta
-                        avatar={<Avatar src={u?.avatar} icon={<UserOutlined />} size="small" />}
-                        title={
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                             <Text style={{ fontSize: 13, maxWidth: 80 }} ellipsis>{u?.nickname || u?.username || `User ${memberId}`}</Text>
-                             {memberRole === 1 && <Tag color="gold" style={{ marginRight: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>主</Tag>}
-                             {memberRole === 2 && <Tag color="blue" style={{ marginRight: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>管</Tag>}
-                          </div>
-                        }
-                        description={
-                           isMuted ? <Text type="danger" style={{ fontSize: 10 }}>已禁言</Text> : null
-                        }
-                      />
-                    </List.Item>
+                      )}
+                    </div>
                   );
-                }}
-              />
+                })
+              )}
+              {sortedMembers.length > 50 && (
+                <div style={{ textAlign: 'center', padding: 8 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>仅显示前 50 名成员</Text>
+                </div>
+              )}
             </div>
           </div>
 
           {/* Footer Actions */}
-          <div style={{ marginTop: 24 }}>
+          <div style={{ marginTop: 32 }}>
             <Button 
               danger 
               block 
               size="large"
               icon={<LogoutOutlined />}
+              style={{ borderRadius: 12, height: 48, background: '#fff' }}
               onClick={() => {
                 const isDismiss = isOwner;
                 const action = isDismiss ? groupApi.dismiss : groupApi.quit;
@@ -1366,14 +1497,9 @@ const Chat = () => {
                     try {
                       await action(String(activeChat.id));
                       message.success(isDismiss ? '群组已解散' : '已退出群组');
-                      
-                      // Optimistic Update: Remove from list immediately
                       setSessionList(prev => prev.filter(s => !(s.type === 'group' && String(s.groupId) === String(activeChat.id))));
-                      
                       setActiveChat(null);
                       setIsDetailOpen(false);
-                      
-                      // Refresh from server
                       setTimeout(() => fetchSessions(), 500);
                     } catch (e) {
                        console.error(e);
@@ -1447,6 +1573,9 @@ const Chat = () => {
               <Form.Item name="description" label="群描述">
                 <Input.TextArea placeholder="介绍一下这个群..." autoSize={{ minRows: 3, maxRows: 6 }} maxLength={200} showCount />
               </Form.Item>
+              <Form.Item name="maxMembers" label="最大人数">
+                <InputNumber min={2} max={2000} placeholder="默认 200" style={{ width: '100%' }} />
+              </Form.Item>
             </Form>
           </Modal>
         </div>
@@ -1503,7 +1632,7 @@ const Chat = () => {
                        <Badge count={item.unread} size="small" offset={[-4, 4]}>
                          <Avatar 
                            shape={isGroup ? "square" : "circle"} 
-                           src={isGroup ? item.avatar : u?.avatar} 
+                           src={isGroup ? item.avatar : (u?.avatar || item.avatar)} 
                            icon={isGroup ? <TeamOutlined /> : <UserOutlined />}
                            size={40}
                            style={{ flexShrink: 0, border: '1px solid rgba(0,0,0,0.05)' }}
@@ -1917,6 +2046,9 @@ const Chat = () => {
           <Form.Item name="description" label="群描述">
             <TextArea placeholder="介绍一下这个群..." />
           </Form.Item>
+          <Form.Item name="maxMembers" label="最大人数">
+            <InputNumber min={2} max={2000} placeholder="默认 200" style={{ width: '100%' }} />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -1972,6 +2104,28 @@ const Chat = () => {
            />
         </div>
       </Modal>
+
+      <GroupRequestsModal
+        open={isGroupRequestsOpen}
+        onCancel={() => setIsGroupRequestsOpen(false)}
+        groupId={activeChat?.type === 'group' ? String(activeChat.id) : null}
+        groupName={activeInfo?.name}
+      />
+
+      <UserProfileModal
+        open={!!profileUserId}
+        userId={profileUserId}
+        currentUserId={currentUser?.id}
+        onClose={() => setProfileUserId(null)}
+        onSendMessage={(user) => {
+          setProfileUserId(null);
+          setIsDetailOpen(false); // Close drawer as well
+          // Switch to friend chat (even if it is self)
+          setActiveChat({ type: 'friend', id: user.id });
+          // If needed, we might want to ensure this session exists in list
+          // But setActiveChat usually handles loading history which creates ad-hoc session view
+        }}
+      />
     </MainLayout>
   );
 };

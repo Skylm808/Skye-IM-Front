@@ -50,6 +50,10 @@ export const groupApi = {
   searchGroupPrecise: (groupId) =>
     request.get(`${GROUP_API_BASE}/search/precise`, { params: { groupId } }),
 
+  // Fuzzy search group by keyword
+  searchGroup: (keyword) =>
+    request.get(`${GROUP_API_BASE}/search`, { params: { keyword } }),
+
   // --- Invitation APIs ---
   // Send invitation
   sendInvitation: (data) => request.post(`${GROUP_API_BASE}/invitation/send`, data),
@@ -64,4 +68,19 @@ export const groupApi = {
   // Get sent invitations
   getSentInvitations: (page = 1, pageSize = 20) =>
     request.get(`${GROUP_API_BASE}/invitation/sent`, { params: { page, pageSize } }),
+
+  // --- Join Request APIs ---
+  // Send join request
+  joinRequest: (data) => request.post(`${GROUP_API_BASE}/join/request`, data),
+
+  // Handle join request (owner/admin)
+  handleJoinRequest: (data) => request.post(`${GROUP_API_BASE}/join/handle`, data),
+
+  // Get join requests (owner/admin)
+  getJoinRequests: (groupId, page = 1, pageSize = 20) =>
+    request.get(`${GROUP_API_BASE}/join/requests`, { params: { groupId, page, pageSize } }),
+
+  // Get sent join requests (user)
+  getSentJoinRequests: (page = 1, pageSize = 20) =>
+    request.get(`${GROUP_API_BASE}/join/sent`, { params: { page, pageSize } }),
 };
