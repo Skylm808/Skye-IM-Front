@@ -35,11 +35,10 @@ SkyeIM-Front 是一个现代化、高性能的即时通讯（IM）应用前端�
 ## 📸 项目截图
 
 ### 登录与注册
-![登录页面](screenshots/login.png)
 *注册界面*
-![img.png](assets/register.png)
+![注册界面](assets/register.png)
 *登录界面*
-![img.png](assets/login.png)
+![assets/login.png](assets/login.png)
 *重置密码界面*
 ![img.png](assets/changePassword.png)
 ### 进入后的界面
