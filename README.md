@@ -63,6 +63,15 @@ SkyeIM-Front 是一个现代化、高性能的即时通讯（IM）应用前端�
 
 **个人中心**
 ![个人中心](assets/profile.png)
+
+### 🔍 搜索与通知
+
+**全局搜索**
+![全局搜索](assets/search.png)
+
+**通知中心**
+![通知中心](assets/notification.png)
+
 ## 🛠️ 技术栈
 
 - **核心框架**: React 19, React Router 7
