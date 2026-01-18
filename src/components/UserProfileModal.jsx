@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Avatar, Button, Descriptions, Modal, Result, Skeleton, Space, Tag, Typography } from 'antd';
-import { UserOutlined, MessageOutlined } from '@ant-design/icons';
+import { Avatar, Button, Descriptions, Modal, Result, Skeleton, Space, Tag, Typography, Popconfirm, message } from 'antd';
+import { UserOutlined, MessageOutlined, StopOutlined } from '@ant-design/icons';
 import { getUserById } from '../api/user';
+import { friendApi } from '../api/friend';
 
 const { Text } = Typography;
 
@@ -22,6 +23,7 @@ const UserProfileModal = ({ open, userId, currentUserId, onClose, onSendMessage 
   const [loading, setLoading] = useState(false);
   const [user, setUser] = useState(null);
   const [error, setError] = useState('');
+  const [blacklisting, setBlacklisting] = useState(false);
 
   const title = useMemo(() => {
     if (!user) return '用户资料';
@@ -53,6 +55,20 @@ const UserProfileModal = ({ open, userId, currentUserId, onClose, onSendMessage 
     };
   }, [open, userId]);
 
+  const handleBlacklist = async () => {
+    if (!user || isSelf) return;
+    setBlacklisting(true);
+    try {
+      await friendApi.setBlacklist(user.id, true);
+      message.success('已将该用户加入黑名单');
+      onClose?.();
+    } catch (e) {
+      message.error('操作失败: ' + (e.message || '未知错误'));
+    } finally {
+      setBlacklisting(false);
+    }
+  };
+
   return (
     <Modal 
       title={title} 
@@ -60,6 +76,20 @@ const UserProfileModal = ({ open, userId, currentUserId, onClose, onSendMessage 
       onCancel={onClose} 
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {!isSelf && user && (
+            <Popconfirm
+              title="确定要拉黑该用户吗？"
+              description="拉黑后将不再接收对方的消息和请求。"
+              onConfirm={handleBlacklist}
+              okText="拉黑"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <Button danger icon={<StopOutlined />} loading={blacklisting}>
+                拉黑
+              </Button>
+            </Popconfirm>
+          )}
           <Button onClick={onClose}>关闭</Button>
           {user && onSendMessage && (
             <Button 
@@ -108,4 +138,3 @@ const UserProfileModal = ({ open, userId, currentUserId, onClose, onSendMessage 
 };
 
 export default UserProfileModal;
-

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover, Badge } from 'antd';
+import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover, Badge, Collapse } from 'antd';
 import {
   UserOutlined,
   TeamOutlined,
@@ -18,12 +18,14 @@ import {
   HighlightOutlined,
   CheckCircleOutlined,
   StopOutlined,
-  CalendarOutlined
+  CalendarOutlined,
+  EditOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import SearchAddModal from '../components/SearchAddModal';
 import GlobalSearchBox from '../components/GlobalSearchBox';
+import RemarkEditModal from '../components/friend/RemarkEditModal';
 import { friendApi } from '../api/friend';
 import { groupApi } from '../api/group';
 import { getUserInfo } from '../api/auth';
@@ -35,7 +37,7 @@ const { Text, Title } = Typography;
 const { confirm } = Modal;
 
 // Reusable User Card Component
-const UserDetailCard = ({ user, friend, navigate, onClose }) => {
+const UserDetailCard = ({ user, friend, navigate, onClose, onEditRemark, onToggleBlacklist, working }) => {
   if (!user) return <Empty description="无法加载用户信息" />;
 
   let genderText = '未知';
@@ -67,6 +69,8 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
     return date.toLocaleString();
   };
 
+  const isBlack = friend?.status === 2;
+
   return (
     <Card
       style={{ width: '100%', maxWidth: 480, borderRadius: 24, boxShadow: '0 20px 40px rgba(0,0,0,0.08)', border: 'none', overflow: 'hidden' }}
@@ -89,6 +93,9 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
           <Tag icon={user.status === 1 ? <CheckCircleOutlined /> : <StopOutlined />} color={user.status === 1 ? 'success' : 'error'}>
             {user.status === 1 ? '状态正常' : '已禁用'}
           </Tag>
+          {isBlack && (
+            <Tag color="red">黑名单</Tag>
+          )}
         </div>
 
         {/* Signature below name */}
@@ -113,9 +120,26 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
         </div>
 
         <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {friend && !friend.isSelf && (
+            <Button size="large" block icon={<EditOutlined />} onClick={() => onEditRemark?.(friend)}>
+              修改备注
+            </Button>
+          )}
           <Button type="primary" size="large" block icon={<MessageOutlined />} onClick={handleSendMessage}>
             发消息
           </Button>
+          {friend && !friend.isSelf && (
+            <Button
+              size="large"
+              block
+              icon={<StopOutlined />}
+              danger={!isBlack}
+              loading={working}
+              onClick={() => onToggleBlacklist?.(friend)}
+            >
+              {isBlack ? '取消拉黑' : '加入黑名单'}
+            </Button>
+          )}
           {friend && !friend.isSelf && (
             <Button size="large" block danger type="text">删除好友</Button>
           )}
@@ -255,6 +279,7 @@ const Contacts = () => {
 
   // Data
   const [friends, setFriends] = useState([]);
+  const [blacklist, setBlacklist] = useState([]);
   const [groups, setGroups] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
 
@@ -278,6 +303,11 @@ const Contacts = () => {
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteFriendId, setInviteFriendId] = useState(null);
   const [inviteMessage, setInviteMessage] = useState('');
+  const [remarkOpen, setRemarkOpen] = useState(false);
+  const [remarkSubmitting, setRemarkSubmitting] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState(null);
+
+  const [workingFriendId, setWorkingFriendId] = useState(null);
 
   const [createGroupForm] = Form.useForm();
 
@@ -285,13 +315,25 @@ const Contacts = () => {
   const fetchData = useCallback(async () => {
     try {
       const userRes = await getUserInfo();
-      setCurrentUser(userRes.user || userRes);
+      const me = userRes.user || userRes;
+      setCurrentUser(me);
 
-      const fRes = await friendApi.getFriendList(1, 100);
-      setFriends(fRes.list || []);
-      await ensureUsers(fRes.list?.map(f => f.friendId) || []);
+      const [fRes, bRes, gRes] = await Promise.all([
+        friendApi.getFriendList(1, 100),
+        friendApi.getBlacklist(1, 100),
+        groupApi.getList(1, 100),
+      ]);
+      const friendList = fRes.list || [];
+      const blacklistList = bRes.list || [];
+      setFriends(friendList);
+      setBlacklist(blacklistList);
+      const userIds = new Set([
+        ...friendList.map(f => f.friendId),
+        ...blacklistList.map(f => f.friendId),
+        me?.id,
+      ]);
+      await ensureUsers(Array.from(userIds).filter(Boolean));
 
-      const gRes = await groupApi.getList(1, 100);
       // Filter out dismissed groups (status === 2)
       const normalizedGroups = (gRes.list || [])
         .map(normalizeGroupItem)
@@ -441,18 +483,44 @@ const Contacts = () => {
     setSearchText('');
   };
 
-  // Filtered Lists
+  const normalizedBlacklist = useMemo(() => {
+    const map = new Map();
+    friends
+      .filter(item => item?.status === 2)
+      .forEach((item) => {
+        if (!item?.friendId) return;
+        map.set(String(item.friendId), { ...item, status: 2 });
+      });
+    blacklist.forEach((item) => {
+      if (!item?.friendId) return;
+      const key = String(item.friendId);
+      const prev = map.get(key) || {};
+      map.set(key, { ...prev, ...item, status: 2 });
+    });
+    return Array.from(map.values());
+  }, [friends, blacklist]);
+
+  const blacklistIdSet = useMemo(
+    () => new Set(normalizedBlacklist.map(item => String(item.friendId))),
+    [normalizedBlacklist]
+  );
+
+  const baseFriends = useMemo(() => {
+    return friends.filter(item => item?.friendId && !blacklistIdSet.has(String(item.friendId)));
+  }, [friends, blacklistIdSet]);
+
   const filteredFriends = useMemo(() => {
-    const list = friends.filter(item => {
+    const query = searchText.toLowerCase();
+    const list = baseFriends.filter(item => {
       const u = getUser(item.friendId);
       const name = item.remark || u?.nickname || u?.username || '';
-      return name.toLowerCase().includes(searchText.toLowerCase());
+      return name.toLowerCase().includes(query);
     });
 
     if (currentUser) {
       const name = currentUser.nickname || currentUser.username || '';
       const selfName = `${name} (我)`;
-      if (!searchText || selfName.toLowerCase().includes(searchText.toLowerCase())) {
+      if (!searchText || selfName.toLowerCase().includes(query)) {
         const selfItem = {
           friendId: currentUser.id,
           remark: selfName,
@@ -462,12 +530,62 @@ const Contacts = () => {
       }
     }
     return list;
-  }, [friends, currentUser, searchText, getUser]);
+  }, [baseFriends, currentUser, searchText, getUser]);
 
-  const filteredGroups = groups.filter(item => {
-    const name = item?.name || item?.groupName || '';
-    return name.toLowerCase().includes(searchText.toLowerCase());
-  });
+  const filteredBlacklist = useMemo(() => {
+    const query = searchText.toLowerCase();
+    return normalizedBlacklist.filter(item => {
+      const u = getUser(item.friendId);
+      const name = item.remark || u?.nickname || u?.username || '';
+      return name.toLowerCase().includes(query);
+    });
+  }, [normalizedBlacklist, searchText, getUser]);
+
+  const friendCount = baseFriends.length;
+  const blacklistCount = normalizedBlacklist.length;
+
+  const isGroupManaged = useCallback(
+    (group) => {
+      if (!group) return false;
+      const role = group?.role ?? group?.myRole ?? group?.memberRole ?? group?.userRole;
+      if (role === 1 || role === 2) return true;
+      if (group?.isOwner || group?.isAdmin) return true;
+      const ownerId = group?.ownerId ?? group?.owner_id ?? group?.owner;
+      if (ownerId != null && currentUser?.id != null) {
+        return String(ownerId) === String(currentUser.id);
+      }
+      return false;
+    },
+    [currentUser]
+  );
+
+  const filteredGroups = useMemo(() => {
+    const query = searchText.toLowerCase();
+    return groups.filter(item => {
+      const name = item?.name || item?.groupName || '';
+      return name.toLowerCase().includes(query);
+    });
+  }, [groups, searchText]);
+
+  const managedGroups = useMemo(
+    () => filteredGroups.filter(isGroupManaged),
+    [filteredGroups, isGroupManaged]
+  );
+
+  const joinedGroups = useMemo(
+    () => filteredGroups.filter(group => !isGroupManaged(group)),
+    [filteredGroups, isGroupManaged]
+  );
+
+  const managedGroupCount = useMemo(
+    () => groups.filter(isGroupManaged).length,
+    [groups, isGroupManaged]
+  );
+
+  const joinedGroupCount = useMemo(
+    () => groups.filter(group => !isGroupManaged(group)).length,
+    [groups, isGroupManaged]
+  );
 
   const handleCreateGroup = async (values) => {
     try {
@@ -501,6 +619,47 @@ const Contacts = () => {
       setInviteMessage('');
     } catch {
       message.error('邀请失败');
+    }
+  };
+
+  const openRemark = (friend) => {
+    if (!friend?.friendId || friend?.isSelf) return;
+    setSelectedFriend(friend);
+    setRemarkOpen(true);
+  };
+
+  const submitRemark = async ({ remark }) => {
+    if (!selectedFriend?.friendId) return;
+    setRemarkSubmitting(true);
+    try {
+      await friendApi.updateRemark(selectedFriend.friendId, remark);
+      message.success('备注已更新');
+      setRemarkOpen(false);
+      setSelectedFriend(null);
+      setSelectedItem(prev => {
+        if (!prev || prev.type !== 'friend' || prev.data?.friendId !== selectedFriend.friendId) return prev;
+        return { ...prev, data: { ...prev.data, remark } };
+      });
+      await fetchData();
+    } finally {
+      setRemarkSubmitting(false);
+    }
+  };
+
+  const toggleBlacklist = async (friend) => {
+    if (!friend?.friendId || friend?.isSelf) return;
+    const shouldBlack = friend.status !== 2;
+    setWorkingFriendId(friend.friendId);
+    try {
+      await friendApi.setBlacklist(friend.friendId, shouldBlack);
+      message.success(shouldBlack ? '已拉黑' : '已取消拉黑');
+      setSelectedItem(prev => {
+        if (!prev || prev.type !== 'friend' || prev.data?.friendId !== friend.friendId) return prev;
+        return { ...prev, data: { ...prev.data, status: shouldBlack ? 2 : 1 } };
+      });
+      await fetchData();
+    } finally {
+      setWorkingFriendId(null);
     }
   };
 
@@ -592,7 +751,7 @@ const Contacts = () => {
   const renderFriendDetail = (friend) => {
     if (!friend || !friend.friendId) return <Empty description="无法加载好友信息" />;
     let u = getUser(friend.friendId);
-    if (friend.isSelf && currentUser) u = currentUser;
+    if (friend.isSelf && currentUser) u = u || currentUser;
 
     if (!u) {
       return (
@@ -604,7 +763,14 @@ const Contacts = () => {
 
     return (
       <div style={{ padding: 40, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <UserDetailCard user={u} friend={friend} navigate={navigate} />
+        <UserDetailCard
+          user={u}
+          friend={friend}
+          navigate={navigate}
+          onEditRemark={openRemark}
+          onToggleBlacklist={toggleBlacklist}
+          working={workingFriendId === friend.friendId}
+        />
       </div>
     );
   };
@@ -806,6 +972,82 @@ const Contacts = () => {
     />
   );
 
+  const renderFriendList = (list, emptyText) => (
+    <List
+      dataSource={list}
+      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} /> }}
+      renderItem={item => {
+        let u = getUser(item.friendId);
+        if (item.isSelf && currentUser) {
+          u = u || currentUser;
+        }
+        const isSelected = selectedItem?.type === 'friend' && selectedItem?.data.friendId === item.friendId;
+        const isBlack = item.status === 2;
+        return (
+          <div style={{ padding: '4px 12px' }}>
+            <div
+              onClick={() => setSelectedItem({ type: 'friend', data: item })}
+              style={{
+                padding: '10px 12px',
+                cursor: 'pointer',
+                background: isSelected ? '#e0f2fe' : 'transparent',
+                borderRadius: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                transition: 'all 0.2s'
+              }}
+            >
+              <Avatar src={u?.avatar} icon={<UserOutlined />} style={{ border: '1px solid #f1f5f9' }} />
+              <Space size={6}>
+                <Text strong style={{ color: isSelected ? '#0284c7' : isBlack ? '#b91c1c' : '#334155' }}>
+                  {item.remark || u?.nickname || u?.username}
+                </Text>
+                {isBlack && (
+                  <Tag color="red" bordered={false} style={{ margin: 0 }}>
+                    黑名单
+                  </Tag>
+                )}
+              </Space>
+            </div>
+          </div>
+        );
+      }}
+    />
+  );
+
+  const renderGroupList = (list, emptyText) => (
+    <List
+      dataSource={list}
+      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} /> }}
+      renderItem={item => {
+        const isSelected = selectedItem?.type === 'group' && selectedItem?.data.groupId === item.groupId;
+        return (
+          <div style={{ padding: '4px 12px' }}>
+            <div
+              onClick={() => setSelectedItem({ type: 'group', data: item })}
+              style={{
+                padding: '10px 12px',
+                cursor: 'pointer',
+                background: isSelected ? '#e0f2fe' : 'transparent',
+                borderRadius: 12,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                transition: 'all 0.2s'
+              }}
+            >
+              <Avatar shape="square" src={item.avatar} icon={<TeamOutlined />} style={{ borderRadius: 6 }} />
+              <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
+                {item.name || item.groupName || item.groupId}
+              </Text>
+            </div>
+          </div>
+        );
+      }}
+    />
+  );
+
   return (
     <MainLayout pageTitle="联系人">
       <Layout style={{ height: 'calc(100vh - 32px)', background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' }}>
@@ -835,38 +1077,32 @@ const Contacts = () => {
                 label: '好友',
                 children: (
                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
-                    <List
-                      dataSource={filteredFriends}
-                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
-                      renderItem={item => {
-                        let u = getUser(item.friendId);
-                        if (item.isSelf && currentUser) {
-                          u = currentUser;
+                    <Collapse
+                      ghost
+                      size="small"
+                      defaultActiveKey={['friends', 'blacklist']}
+                      items={[
+                        {
+                          key: 'friends',
+                          label: (
+                            <Space>
+                              <Text strong>我的好友</Text>
+                              <Tag bordered={false} style={{ margin: 0, background: '#e2e8f0', color: '#475569', borderRadius: 999, padding: '0 8px' }}>{friendCount}</Tag>
+                            </Space>
+                          ),
+                          children: renderFriendList(filteredFriends, '暂无好友'),
+                        },
+                        {
+                          key: 'blacklist',
+                          label: (
+                            <Space>
+                              <Text strong>黑名单</Text>
+                              <Tag bordered={false} style={{ margin: 0, background: '#e2e8f0', color: '#475569', borderRadius: 999, padding: '0 8px' }}>{blacklistCount}</Tag>
+                            </Space>
+                          ),
+                          children: renderFriendList(filteredBlacklist, '暂无黑名单'),
                         }
-                        const isSelected = selectedItem?.type === 'friend' && selectedItem?.data.friendId === item.friendId;
-                        return (
-                          <div style={{ padding: '4px 12px' }}>
-                            <div
-                              onClick={() => setSelectedItem({ type: 'friend', data: item })}
-                              style={{
-                                padding: '10px 12px',
-                                cursor: 'pointer',
-                                background: isSelected ? '#e0f2fe' : 'transparent',
-                                borderRadius: 12,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 12,
-                                transition: 'all 0.2s'
-                              }}
-                            >
-                              <Avatar src={u?.avatar} icon={<UserOutlined />} style={{ border: '1px solid #f1f5f9' }} />
-                              <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
-                                {item.remark || u?.nickname || u?.username}
-                              </Text>
-                            </div>
-                          </div>
-                        );
-                      }}
+                      ]}
                     />
                   </div>
                 )
@@ -876,34 +1112,36 @@ const Contacts = () => {
                 label: '群组',
                 children: (
                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
-                    <List
-                      dataSource={filteredGroups}
-                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
-                      renderItem={item => {
-                        const isSelected = selectedItem?.type === 'group' && selectedItem?.data.groupId === item.groupId;
-                        return (
-                          <div style={{ padding: '4px 12px' }}>
-                            <div
-                              onClick={() => setSelectedItem({ type: 'group', data: item })}
-                              style={{
-                                padding: '10px 12px',
-                                cursor: 'pointer',
-                                background: isSelected ? '#e0f2fe' : 'transparent',
-                                borderRadius: 12,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 12,
-                                transition: 'all 0.2s'
-                              }}
-                            >
-                              <Avatar shape="square" src={item.avatar} icon={<TeamOutlined />} style={{ borderRadius: 6 }} />
-                              <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
-                                {item.name || item.groupName || item.groupId}
-                              </Text>
-                            </div>
-                          </div>
-                        );
-                      }}
+                    <Collapse
+                      ghost
+                      size="small"
+                      defaultActiveKey={['joined', 'managed']}
+                      items={[
+                        {
+                          key: 'joined',
+                          label: (
+                            <Space>
+                              <Text strong>我加入的群聊</Text>
+                              <Tag bordered={false} style={{ margin: 0, background: '#e2e8f0', color: '#475569', borderRadius: 999, padding: '0 8px' }}>
+                                {joinedGroupCount}
+                              </Tag>
+                            </Space>
+                          ),
+                          children: renderGroupList(joinedGroups, '暂无加入的群聊'),
+                        },
+                        {
+                          key: 'managed',
+                          label: (
+                            <Space>
+                              <Text strong>我管理的群聊</Text>
+                              <Tag bordered={false} style={{ margin: 0, background: '#e2e8f0', color: '#475569', borderRadius: 999, padding: '0 8px' }}>
+                                {managedGroupCount}
+                              </Tag>
+                            </Space>
+                          ),
+                          children: renderGroupList(managedGroups, '暂无管理的群聊'),
+                        }
+                      ]}
                     />
                   </div>
                 )
@@ -929,6 +1167,16 @@ const Contacts = () => {
 
       {/* Modals */}
       <SearchAddModal open={isSearchOpen} onCancel={() => setIsSearchOpen(false)} initialTab={searchTab} />
+      <RemarkEditModal
+        open={remarkOpen}
+        initialRemark={selectedFriend?.remark || ''}
+        submitting={remarkSubmitting}
+        onCancel={() => {
+          setRemarkOpen(false);
+          setSelectedFriend(null);
+        }}
+        onSubmit={submitRemark}
+      />
 
       <Modal
         title="创建群组"

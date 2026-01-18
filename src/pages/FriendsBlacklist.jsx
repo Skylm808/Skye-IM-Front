@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Card, Empty, List, Space, Typography, message } from 'antd';
+import { Button, Card, Empty, Input, List, Space, Typography, message } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import UserProfileModal from '../components/UserProfileModal';
 import FriendCard from '../components/friend/FriendCard';
+import RemarkEditModal from '../components/friend/RemarkEditModal';
 import { friendApi } from '../api/friend';
 import useUserCache from '../hooks/useUserCache';
 
@@ -19,11 +20,15 @@ const FriendsBlacklist = () => {
   const [pageSize] = useState(20);
   const [list, setList] = useState([]);
   const [total, setTotal] = useState(0);
+  const [keyword, setKeyword] = useState('');
 
   const [workingFriendId, setWorkingFriendId] = useState(null);
 
   const [profileOpen, setProfileOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState(null);
+  const [remarkOpen, setRemarkOpen] = useState(false);
+  const [remarkSubmitting, setRemarkSubmitting] = useState(false);
+  const [selectedFriend, setSelectedFriend] = useState(null);
 
   const load = async (p = page) => {
     setLoading(true);
@@ -56,6 +61,25 @@ const FriendsBlacklist = () => {
     }
   };
 
+  const openRemark = (relation) => {
+    setSelectedFriend(relation);
+    setRemarkOpen(true);
+  };
+
+  const submitRemark = async ({ remark }) => {
+    if (!selectedFriend?.friendId) return;
+    setRemarkSubmitting(true);
+    try {
+      await friendApi.updateRemark(selectedFriend.friendId, remark);
+      message.success('备注已更新');
+      setRemarkOpen(false);
+      setSelectedFriend(null);
+      await load(page);
+    } finally {
+      setRemarkSubmitting(false);
+    }
+  };
+
   const normalizedList = useMemo(() => {
     return list
       .map((it) => ({
@@ -65,6 +89,18 @@ const FriendsBlacklist = () => {
       }))
       .filter((it) => it.friendId);
   }, [list]);
+
+  const filteredList = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return normalizedList;
+    return normalizedList.filter((it) => {
+      const user = getUser(it.friendId);
+      const hay = [it.remark || '', user?.nickname || '', user?.username || '']
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(kw);
+    });
+  }, [keyword, normalizedList, getUser]);
 
   return (
     <MainLayout pageTitle="黑名单">
@@ -80,10 +116,20 @@ const FriendsBlacklist = () => {
         </Button>
       </div>
 
+      <Card style={{ borderRadius: 16, marginBottom: 16 }}>
+        <Input
+          size="large"
+          placeholder="搜索备注 / 昵称 / 用户名"
+          value={keyword}
+          onChange={(e) => setKeyword(e.target.value)}
+          allowClear
+        />
+      </Card>
+
       <Card style={{ borderRadius: 16 }}>
         <List
           loading={loading}
-          dataSource={normalizedList}
+          dataSource={filteredList}
           locale={{ emptyText: <Empty description="暂无黑名单" /> }}
           split={false}
           pagination={{
@@ -106,6 +152,7 @@ const FriendsBlacklist = () => {
                     setSelectedUserId(relation.friendId);
                     setProfileOpen(true);
                   }}
+                  onEditRemark={() => openRemark(relation)}
                   onToggleBlacklist={() => cancelBlack(relation.friendId)}
                 />
               </List.Item>
@@ -123,9 +170,19 @@ const FriendsBlacklist = () => {
           setSelectedUserId(null);
         }}
       />
+
+      <RemarkEditModal
+        open={remarkOpen}
+        initialRemark={selectedFriend?.remark || ''}
+        submitting={remarkSubmitting}
+        onCancel={() => {
+          setRemarkOpen(false);
+          setSelectedFriend(null);
+        }}
+        onSubmit={submitRemark}
+      />
     </MainLayout>
   );
 };
 
 export default FriendsBlacklist;
-

@@ -61,6 +61,15 @@ const UserSearch = () => {
   const [groupInfoMap, setGroupInfoMap] = useState({});
   const requestsPageSize = 10;
 
+  // Current user for modal
+  const [currentUser, setCurrentUser] = useState(null);
+  
+  useEffect(() => {
+    import('../api/auth').then(({ getUserInfo }) => {
+      getUserInfo().then(res => setCurrentUser(res.user || res)).catch(() => {});
+    });
+  }, []);
+
   const columns = useMemo(
     () => [
       {
@@ -475,9 +484,14 @@ const UserSearch = () => {
       <UserProfileModal
         open={profileOpen}
         userId={selectedUserId}
+        currentUserId={currentUser?.id}
         onClose={() => {
           setProfileOpen(false);
           setSelectedUserId(null);
+        }}
+        onSendMessage={(targetUser) => {
+          navigate(`/chat?type=friend&id=${targetUser.id}`);
+          setProfileOpen(false);
         }}
       />
     </MainLayout>

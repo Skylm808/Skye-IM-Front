@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Layout, List, Avatar, Input, InputNumber, Typography, Button, Space, Badge, Empty, Spin, theme, Tabs, Modal, Form, message, Tooltip, Dropdown, Drawer, Descriptions, Tag, Image, Upload } from 'antd';
-import { SendOutlined, UserOutlined, PictureOutlined, TeamOutlined, PlusOutlined, MessageOutlined, MoreOutlined, SearchOutlined, BellOutlined, UserAddOutlined, DeleteOutlined, ExclamationCircleOutlined, FileOutlined, PaperClipOutlined, CloudDownloadOutlined, CloseOutlined, UploadOutlined, EditOutlined, LogoutOutlined } from '@ant-design/icons';
+import { SendOutlined, UserOutlined, PictureOutlined, TeamOutlined, PlusOutlined, MessageOutlined, MoreOutlined, SearchOutlined, BellOutlined, UserAddOutlined, DeleteOutlined, ExclamationCircleOutlined, FileOutlined, PaperClipOutlined, CloudDownloadOutlined, CloseOutlined, UploadOutlined, EditOutlined, LogoutOutlined, StopOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import SearchAddModal from '../components/SearchAddModal';
 import GlobalSearchBox from '../components/GlobalSearchBox';
 import GroupRequestsModal from '../components/group/GroupRequestsModal';
 import UserProfileModal from '../components/UserProfileModal';
+import RemarkEditModal from '../components/friend/RemarkEditModal';
 import { friendApi } from '../api/friend';
 import { messageApi } from '../api/message';
 import { groupApi } from '../api/group';
@@ -148,8 +149,9 @@ const Chat = () => {
   
   const [sessionList, setSessionList] = useState([]);
   const [activeChat, setActiveChat] = useState(null);
-  const [friendsList, setFriendsList] = useState([]); // Store friends for invitation
-  
+  const [friendsList, setFriendsList] = useState([]); 
+  const [blacklist, setBlacklist] = useState(new Set()); // Store blacklisted IDs
+
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -175,6 +177,9 @@ const Chat = () => {
   const [atMeHasMore, setAtMeHasMore] = useState(false);
   const atMeCursorRef = useRef(null);
   const atMeLoadingRef = useRef(false);
+  const [remarkOpen, setRemarkOpen] = useState(false);
+  const [remarkSubmitting, setRemarkSubmitting] = useState(false);
+  const [remarkTarget, setRemarkTarget] = useState(null);
 
   const handleGlobalSearch = (value) => {
     setSearchText(value);
@@ -524,10 +529,14 @@ const Chat = () => {
   const fetchSessions = useCallback(async (userOverride) => {
     try {
       const user = userOverride || currentUser;
-      const [friendRes, groupRes] = await Promise.all([
+      const [friendRes, groupRes, blacklistRes] = await Promise.all([
         friendApi.getFriendList(1, 100),
-        groupApi.getList(1, 100)
+        groupApi.getList(1, 100),
+        friendApi.getBlacklist(1, 100)
       ]);
+      
+      const blackSet = new Set((blacklistRes?.list || []).map(b => String(b.friendId)));
+      setBlacklist(blackSet);
       
       const friends = (friendRes.list || []).map(f => ({ ...f, type: 'friend', key: `f-${f.friendId}`, unread: 0, lastAt: 0, lastMessage: '' }));
       // Filter out dismissed groups (status === 2)
@@ -754,7 +763,7 @@ const Chat = () => {
     const unsubscribe = wsClient.subscribe(handleWsMessage);
     if (wsClient.isConnected) setWsStatus('connected');
     return unsubscribe;
-  }, [activeChat, currentUser]);
+  }, [activeChat, currentUser, blacklist]);
 
   const handlePrivateMessage = (msg) => {
     const data = msg.data || msg;
@@ -762,6 +771,10 @@ const Chat = () => {
     const fromId = String(data.fromUserId || data.senderId);
     const toId = String(data.toUserId);
     const peerId = fromId === myId ? toId : fromId;
+
+    if (fromId !== myId && blacklist.has(fromId)) {
+      return;
+    }
 
     if (activeChat?.type === 'friend' && String(activeChat.id) === String(peerId)) {
       upsertMessage(data, 'friend');
@@ -821,6 +834,7 @@ const Chat = () => {
 
       if (activeType !== 'friend') return;
       const fromId = String(item.fromUserId);
+      if (fromId !== String(currentUser.id) && blacklist.has(fromId)) return;
       const peerId = fromId === String(currentUser.id) ? item.toUserId : item.fromUserId;
       if (String(peerId) !== String(activeId)) return;
       matches.push(item);
@@ -1099,7 +1113,11 @@ const Chat = () => {
       const content = inputValue;
       try {
           if (activeChat.type === 'friend') {
-          const msgId = createClientMsgId();
+            if (blacklist.has(String(activeChat.id))) {
+              message.error('该用户已被加入黑名单，无法发送消息');
+              return;
+            }
+            const msgId = createClientMsgId();
           const msgData = { msgId, toUserId: Number(activeChat.id), content, contentType: 1 };
           const success = wsClient.send({ type: 'chat', data: msgData });
           if (success) {
@@ -1330,7 +1348,32 @@ const Chat = () => {
     }
   };
 
+  const openRemark = () => {
+    if (!activeChat || activeChat.type !== 'friend') return;
+    const rel = sessionList.find(s => s.type === 'friend' && s.friendId === activeChat.id);
+    setRemarkTarget({ friendId: activeChat.id, remark: rel?.remark || '' });
+    setRemarkOpen(true);
+  };
+
+  const submitRemark = async ({ remark }) => {
+    if (!remarkTarget?.friendId) return;
+    setRemarkSubmitting(true);
+    try {
+      await friendApi.updateRemark(remarkTarget.friendId, remark);
+      message.success('备注已更新');
+      setRemarkOpen(false);
+      setRemarkTarget(null);
+      await fetchSessions();
+    } finally {
+      setRemarkSubmitting(false);
+    }
+  };
+
   const activeInfo = getActiveInfo();
+  const isActiveBlack = useMemo(() => {
+    if (!activeChat || activeChat.type !== 'friend') return false;
+    return blacklist.has(String(activeChat.id));
+  }, [activeChat, blacklist]);
 
   // Search Add Menu
   const addMenu = (
@@ -1387,6 +1430,7 @@ const Chat = () => {
     
     if (activeChat.type === 'friend') {
       const u = getUser(activeChat.id);
+      const isSelfChat = String(activeChat.id) === String(currentUser?.id);
       return (
         <div style={{ padding: 24, textAlign: 'center' }}>
            <div style={{ 
@@ -1405,6 +1449,56 @@ const Chat = () => {
              <Text type="secondary" style={{ fontSize: 16 }}>@{u?.username}</Text>
              
              <div style={{ marginTop: 40, display: 'flex', flexDirection: 'column', gap: 12 }}>
+               {!isSelfChat && (
+                 <Button
+                   size="large"
+                   block
+                   icon={<EditOutlined />}
+                   style={{ borderRadius: 12, height: 48 }}
+                   onClick={openRemark}
+                 >
+                   修改备注
+                 </Button>
+               )}
+               {!isSelfChat && (
+                 <Button 
+                   danger={!isActiveBlack} 
+                   size="large" 
+                   block 
+                   icon={<StopOutlined />} 
+                   style={{ borderRadius: 12, height: 48 }}
+                   onClick={() => {
+                     const shouldBlack = !isActiveBlack;
+                     confirm({
+                       title: shouldBlack ? '确认拉黑' : '取消拉黑',
+                       icon: <ExclamationCircleOutlined />,
+                       content: shouldBlack
+                         ? '拉黑后将不再接收对方的消息，确认拉黑？'
+                         : '取消拉黑后可重新接收对方消息，确认取消拉黑？',
+                       okType: shouldBlack ? 'danger' : 'primary',
+                       onOk: async () => {
+                         try {
+                           await friendApi.setBlacklist(activeChat.id, shouldBlack);
+                           message.success(shouldBlack ? '已拉黑该用户' : '已取消拉黑');
+                           setBlacklist(prev => {
+                             const next = new Set(prev);
+                             if (shouldBlack) {
+                               next.add(String(activeChat.id));
+                             } else {
+                               next.delete(String(activeChat.id));
+                             }
+                             return next;
+                           });
+                         } catch (e) {
+                           message.error('操作失败');
+                         }
+                       }
+                     });
+                   }}
+                 >
+                   {isActiveBlack ? '取消拉黑' : '加入黑名单'}
+                 </Button>
+               )}
                <Button 
                  danger 
                  size="large" 
@@ -2049,9 +2143,10 @@ const Chat = () => {
                           handleSendMessage();
                         }
                       }}
-                      placeholder="Enter a message..."
+                      placeholder={isActiveBlack ? '已加入黑名单，无法发送消息' : 'Enter a message...'}
                       autoSize={{ minRows: 2, maxRows: 6 }}
                       bordered={false}
+                      disabled={isActiveBlack}
                       style={{ padding: 0, resize: 'none', background: 'transparent' }}
                     />
                   </div>
@@ -2061,7 +2156,7 @@ const Chat = () => {
                        icon={<SendOutlined />} 
                        onClick={handleSendMessage}
                        style={{ borderRadius: 20, paddingLeft: 20, paddingRight: 20, boxShadow: '0 4px 12px rgba(14, 165, 233, 0.3)' }}
-                       disabled={!inputValue.trim() && !pendingAttachment}
+                       disabled={isActiveBlack || (!inputValue.trim() && !pendingAttachment)}
                      >
                        发送
                      </Button>
@@ -2273,6 +2368,17 @@ const Chat = () => {
         onCancel={() => setIsGroupRequestsOpen(false)}
         groupId={activeChat?.type === 'group' ? String(activeChat.id) : null}
         groupName={activeInfo?.name}
+      />
+
+      <RemarkEditModal
+        open={remarkOpen}
+        initialRemark={remarkTarget?.remark || ''}
+        submitting={remarkSubmitting}
+        onCancel={() => {
+          setRemarkOpen(false);
+          setRemarkTarget(null);
+        }}
+        onSubmit={submitRemark}
       />
 
       <UserProfileModal

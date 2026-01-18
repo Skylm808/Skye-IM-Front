@@ -26,12 +26,13 @@ const RemarkEditModal = ({ open, initialRemark, onCancel, onSubmit, submitting }
         <Form.Item
           label="备注名"
           name="remark"
-          rules={[{ max: 30, message: '备注最多 30 个字符' }]}
+          rules={[{ max: 32, message: '备注最多 32 个字符' }]}
         >
           <Input
             size="large"
             placeholder="例如：小明 / 同事-张三"
-            maxLength={30}
+            maxLength={32}
+            showCount
             allowClear
           />
         </Form.Item>
