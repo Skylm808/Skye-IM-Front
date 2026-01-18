@@ -118,6 +118,10 @@ src/
 
 欢迎提交 Issue 和 Pull Request！
 
+## 🙏 致谢
+
+本项目前端 UI/UX 设计由 [UI/UX Pro Max Skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) 辅助构建，感谢其提供的帮助。
+
 ## 📄 开源协议
 
 MIT License
