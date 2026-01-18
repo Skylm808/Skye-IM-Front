@@ -34,29 +34,35 @@ SkyeIM-Front 是一个现代化、高性能的即时通讯（IM）应用前端�
 
 ## 📸 项目截图
 
-### 登录与注册
-*注册界面*
+### 🔐 认证与安全
+
+**登录界面**
+![登录界面](assets/login.png)
+
+**注册界面**
 ![注册界面](assets/register.png)
-*登录界面*
-![assets/login.png](assets/login.png)
-*重置密码界面*
-![img.png](assets/changePassword.png)
-### 进入后的界面
-![img.png](assets/main.png)
-### 聊天主界面
-![聊天界面](screenshots/chat.png)
-*实时聊天窗口，支持消息收发*
-![img.png](assets/chat.png)
-### 联系人与群组
-![联系人列表](screenshots/contacts.png)
-*好友列表*
-![img.png](assets/friend.png)
-*群组管理*
-![img.png](assets/group.png)
-### 个人中心
-![个人资料](screenshots/profile.png)
-*用户个人信息管理*
-![img.png](assets/profile.png)
+
+**密码重置**
+![重置密码](assets/changePassword.png)
+
+### 💬 核心通讯与主页
+
+**系统首页**
+![系统首页](assets/main.png)
+
+**聊天界面**
+![聊天界面](assets/chat.png)
+
+### 👥 社交与个人
+
+**好友列表**
+![好友列表](assets/friend.png)
+
+**群组管理**
+![群组管理](assets/group.png)
+
+**个人中心**
+![个人中心](assets/profile.png)
 ## 🛠️ 技术栈
 
 - **核心框架**: React 19, React Router 7
