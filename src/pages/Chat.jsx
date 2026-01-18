@@ -129,6 +129,15 @@ const touchSession = (type, id, msg) => {
   }));
 };
 
+const normalizeGroupItem = (item) => {
+  if (!item || typeof item !== 'object') return null;
+  const groupId = item.groupId ?? item.groupID ?? item.group_id ?? item.id ?? item.groupIdStr;
+  const name = item.name ?? item.groupName ?? item.group_name;
+  const avatar = item.avatar ?? item.groupAvatar ?? item.group_avatar;
+  const ownerId = item.ownerId ?? item.owner_id ?? item.owner;
+  return { ...item, groupId, name, avatar, ownerId };
+};
+
 const Chat = () => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -171,18 +180,24 @@ const Chat = () => {
     setSearchText(value);
   };
 
+  const openChat = useCallback((type, id) => {
+    if (!type || id == null) return;
+    const normalizedId = type === 'group' ? String(id) : Number(id);
+    navigate(`/chat?type=${type}&id=${encodeURIComponent(String(normalizedId))}`, { replace: true });
+  }, [navigate]);
+
   const onGlobalSelect = (value, option) => {
      if (option.type === 'user') {
        const existing = sessionList.find(s => s.type === 'friend' && s.friendId === option.data.id);
        if (existing) {
-         setActiveChat({ type: 'friend', id: option.data.id });
+         openChat('friend', option.data.id);
        } else {
          message.info('请在“发现”中添加好友');
        }
      } else {
        const existing = sessionList.find(s => s.type === 'group' && s.groupId === option.data.groupId);
        if (existing) {
-         setActiveChat({ type: 'group', id: option.data.groupId });
+         openChat('group', option.data.groupId);
        } else {
          message.info('请在“发现”中搜索并加入群组');
        }
@@ -517,6 +532,8 @@ const Chat = () => {
       const friends = (friendRes.list || []).map(f => ({ ...f, type: 'friend', key: `f-${f.friendId}`, unread: 0, lastAt: 0, lastMessage: '' }));
       // Filter out dismissed groups (status === 2)
       const groups = (groupRes.list || [])
+        .map(normalizeGroupItem)
+        .filter(Boolean)
         .filter(g => g.status !== 2)
         .map(g => ({ ...g, type: 'group', key: `g-${g.groupId}`, unread: 0, lastAt: 0, lastMessage: '', lastSeq: 0 }));
       
@@ -555,12 +572,13 @@ const Chat = () => {
         const prevMap = new Map((prev || []).map(s => [s.key, s]));
         return sessions.map(s => {
           const old = prevMap.get(s.key);
+          const metaItem = meta?.[s.key];
           return {
             ...s,
-            unread: (old?.unread ?? meta?.[s.key]?.unread ?? 0) || 0,
-            lastAt: (old?.lastAt ?? meta?.[s.key]?.lastAt ?? 0) || 0,
-            lastMessage: (old?.lastMessage ?? meta?.[s.key]?.lastMessage ?? '') || '',
-            lastSeq: (old?.lastSeq ?? meta?.[s.key]?.lastSeq ?? s.lastSeq ?? 0) || 0,
+            unread: metaItem?.unread ?? old?.unread ?? 0,
+            lastAt: metaItem?.lastAt ?? old?.lastAt ?? 0,
+            lastMessage: metaItem?.lastMessage ?? old?.lastMessage ?? '',
+            lastSeq: metaItem?.lastSeq ?? old?.lastSeq ?? s.lastSeq ?? 0,
           };
         });
       });
@@ -692,25 +710,43 @@ const Chat = () => {
     return unsubscribe;
   }, []);
 
+  const normalizeWsType = (type) => {
+    if (!type) return type;
+    if (type === 'message') return 'chat';
+    if (type === 'group_message') return 'group_chat';
+    if (type === 'group_join' || type === 'group_leave' || type === 'group_dismiss') return 'group_event';
+    return type;
+  };
+
   // WS Listener
   useEffect(() => {
     const handleWsMessage = (msg) => {
+      if (!msg) return;
       if (msg.type === 'status') {
         setWsStatus(msg.status);
-      } else if (msg.type === 'message') {
+        return;
+      }
+
+      const normalizedType = normalizeWsType(msg.type);
+
+      if (normalizedType === 'chat') {
         handlePrivateMessage(msg);
-      } else if (msg.type === 'group_message') {
+      } else if (normalizedType === 'group_chat') {
         handleGroupMessage(msg);
-      } else if (msg.type === 'friend_request') {
+      } else if (normalizedType === 'offline_messages') {
+        handleOfflineMessages(msg);
+      } else if (normalizedType === 'read') {
+        handleReadReceipt(msg);
+      } else if (normalizedType === 'friend_request') {
         message.info(`收到好友请求: ${msg.data?.message || ''}`);
-      } else if (msg.type === 'group_invitation') {
+      } else if (normalizedType === 'group_invitation') {
         message.info(`收到入群邀请: ${msg.data?.message || ''}`);
-      } else if (msg.type === 'ack') {
+      } else if (normalizedType === 'ack') {
         handleAck(msg);
-      } else if (msg.type === 'error') {
+      } else if (normalizedType === 'error') {
         const errorMsg = msg.data?.message || msg.message || '未知错误';
         message.error(errorMsg);
-      } else if (msg.type === 'group_join' || msg.type === 'group_leave' || msg.type === 'group_dismiss') {
+      } else if (normalizedType === 'group_event') {
         handleGroupEvent(msg);
       }
     };
@@ -757,6 +793,56 @@ const Chat = () => {
     }
   };
 
+  const handleOfflineMessages = (msg) => {
+    const data = msg?.data || {};
+    const list = Array.isArray(data.messages) ? data.messages : [];
+    if (!activeChat || !currentUser || list.length === 0) return;
+
+    const batchType = data.messageType;
+    const activeType = activeChat.type;
+    const activeId = activeChat.id;
+    const matches = [];
+    const userIds = new Set();
+    let maxSeq = 0;
+    let hasActiveFriend = false;
+
+    list.forEach((item) => {
+      if (!item) return;
+      const isGroup = batchType === 'group' || item.groupId || item.type === 'group_chat';
+      if (isGroup) {
+        if (activeType !== 'group') return;
+        if (String(item.groupId) !== String(activeId)) return;
+        const normalized = normalizeGroupMessage(item);
+        matches.push(normalized);
+        if (normalized.fromUserId) userIds.add(normalized.fromUserId);
+        if (Number.isFinite(normalized.seq)) maxSeq = Math.max(maxSeq, normalized.seq);
+        return;
+      }
+
+      if (activeType !== 'friend') return;
+      const fromId = String(item.fromUserId);
+      const peerId = fromId === String(currentUser.id) ? item.toUserId : item.fromUserId;
+      if (String(peerId) !== String(activeId)) return;
+      matches.push(item);
+      if (item.fromUserId) userIds.add(item.fromUserId);
+      hasActiveFriend = true;
+    });
+
+    if (!matches.length) return;
+
+    matches.forEach((item) => upsertMessage(item, activeType));
+    shouldScrollToBottomRef.current = true;
+
+    if (activeType === 'group' && maxSeq) {
+      const key = String(activeId);
+      const lastSeq = lastGroupSeqRef.current[key] || 0;
+      if (maxSeq > lastSeq) lastGroupSeqRef.current[key] = maxSeq;
+    }
+
+    if (userIds.size) ensureUsers(Array.from(userIds));
+    if (hasActiveFriend) messageApi.markRead(activeId).catch(() => {});
+  };
+
   const handleAck = (msg) => {
     const data = msg.data || {};
     const msgId = data.msgId;
@@ -788,21 +874,91 @@ const Chat = () => {
     }));
   };
 
+  const handleReadReceipt = (msg) => {
+    const data = msg?.data || {};
+    const msgIds = Array.isArray(data.msgIds) ? data.msgIds : [];
+    if (!msgIds.length) return;
+    const idSet = new Set(msgIds.map((id) => String(id)));
+
+    setMessages(prev => prev.map(m => {
+      const id = m.msgId || m.id;
+      if (!id || !idSet.has(String(id))) return m;
+      return { ...m, localStatus: 'read', readBy: data.readBy, readAt: data.readAt };
+    }));
+  };
+
   const handleGroupEvent = (msg) => {
-    const data = msg.data || {};
-    const groupId = data.groupId;
-    if (msg.type === 'group_join') message.info('有新成员加入群聊');
-    if (msg.type === 'group_leave') message.info('有成员退出群聊');
-    if (msg.type === 'group_dismiss') message.warning('群组已解散');
+    const rawType = msg?.type;
+    let eventType = msg?.eventType || msg?.data?.eventType;
+    let eventData = msg?.eventData || msg?.data?.eventData || msg?.data || {};
 
-    if (groupId && activeChat?.type === 'group' && String(activeChat.id) === String(groupId)) {
-      fetchDetailInfo();
+    if (!eventType) {
+      if (rawType === 'group_join') eventType = 'joinGroup';
+      if (rawType === 'group_leave') eventType = 'quitGroup';
+      if (rawType === 'group_dismiss') eventType = 'dismissGroup';
     }
-    fetchSessions();
 
-    if (msg.type === 'group_dismiss' && groupId && activeChat?.type === 'group' && String(activeChat.id) === String(groupId)) {
+    const groupId = eventData?.groupId;
+    const memberId = eventData?.memberId ?? eventData?.userId;
+    const isSelf = memberId != null && String(memberId) === String(currentUser?.id);
+    const isActiveGroup =
+      groupId && activeChat?.type === 'group' && String(activeChat.id) === String(groupId);
+
+    const removeGroupSession = () => {
+      if (!groupId) return;
+      setSessionList(prev => prev.filter(s => !(s.type === 'group' && String(s.groupId) === String(groupId))));
+      updateSessionMeta(getGroupSessionKey(groupId), (prev) => ({ ...prev, unread: 0 }));
+    };
+
+    const exitActiveGroup = () => {
+      if (!isActiveGroup) return;
       setActiveChat(null);
+      navigate('/chat');
+    };
+
+    const removeMemberFromList = () => {
+      if (!isActiveGroup || memberId == null) return;
+      setGroupMembers(prev => prev.filter(m => String(m.userId) !== String(memberId)));
+    };
+
+    let shouldRefreshSessions = false;
+
+    if (eventType === 'dismissGroup') {
+      message.warning('Group was dismissed.');
+      removeGroupSession();
+      exitActiveGroup();
+      shouldRefreshSessions = true;
+    } else if (eventType === 'kickMember') {
+      if (isSelf) {
+        message.warning('You were removed from the group.');
+        removeGroupSession();
+        exitActiveGroup();
+        shouldRefreshSessions = true;
+      } else {
+        message.info('A member was removed from the group.');
+        removeMemberFromList();
+      }
+    } else if (eventType === 'quitGroup') {
+      if (isSelf) {
+        message.info('You left the group.');
+        removeGroupSession();
+        exitActiveGroup();
+        shouldRefreshSessions = true;
+      } else {
+        message.info('A member left the group.');
+        removeMemberFromList();
+      }
+    } else if (eventType === 'joinGroup') {
+      if (isSelf) {
+        message.success('You joined a new group.');
+        shouldRefreshSessions = true;
+      } else {
+        message.info('A new member joined the group.');
+      }
+      if (isActiveGroup) fetchDetailInfo();
     }
+
+    if (shouldRefreshSessions) fetchSessions();
   };
 
   useEffect(() => {
@@ -905,6 +1061,11 @@ const Chat = () => {
 
     lastReadSeqRef.current[groupId] = maxSeq;
     groupApi.read(groupId, maxSeq).catch(() => {});
+    updateSessionMeta(getGroupSessionKey(groupId), (prev) => ({
+      ...prev,
+      readSeq: Math.max(prev.readSeq || 0, maxSeq),
+      lastSeq: Math.max(prev.lastSeq || 0, maxSeq),
+    }));
   }, [activeChat, messages]);
 
   const loadMoreHistory = async () => {
@@ -943,6 +1104,7 @@ const Chat = () => {
           const success = wsClient.send({ type: 'chat', data: msgData });
           if (success) {
             const optimisticMsg = { ...msgData, fromUserId: currentUser.id, createdAt: Date.now() / 1000, localStatus: 'sending' };
+            touchSession(activeChat.type, activeChat.id, optimisticMsg);
             upsertMessage(optimisticMsg, 'friend');
             scheduleAckTimeout(msgId);
           } else {
@@ -988,6 +1150,7 @@ const Chat = () => {
           const success = wsClient.send({ type: 'group_chat', data: msgData });
           if (success) {
             const optimisticMsg = { ...msgData, fromUserId: currentUser.id, createdAt: Date.now() / 1000, localStatus: 'sending' };
+            touchSession(activeChat.type, activeChat.id, optimisticMsg);
             upsertMessage(optimisticMsg, 'group');
             scheduleAckTimeout(msgId);
             setAtTargets([]);
@@ -1048,7 +1211,7 @@ const Chat = () => {
       createGroupForm.resetFields();
       message.success('创建成功');
       await fetchSessions();
-      if (res && res.groupId) setActiveChat({ id: res.groupId, type: 'group' });
+      if (res && res.groupId) openChat('group', res.groupId);
     } catch (e) {
       console.error(e);
       message.error('创建失败');
@@ -1614,7 +1777,7 @@ const Chat = () => {
                 return (
                   <div style={{ padding: '4px 8px' }}>
                     <div 
-                      onClick={() => setActiveChat({ id, type: item.type })}
+                      onClick={() => openChat(item.type, id)}
                       style={{ 
                         padding: '12px 12px', 
                         cursor: 'pointer',
@@ -2121,7 +2284,7 @@ const Chat = () => {
           setProfileUserId(null);
           setIsDetailOpen(false); // Close drawer as well
           // Switch to friend chat (even if it is self)
-          setActiveChat({ type: 'friend', id: user.id });
+          openChat('friend', user.id);
           // If needed, we might want to ensure this session exists in list
           // But setActiveChat usually handles loading history which creates ad-hoc session view
         }}
