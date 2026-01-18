@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Empty, List, Space, Tabs, Typography, message, Radio } from 'antd';
+import { Badge, Empty, List, Space, Tabs, Typography, message, Radio } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import FriendRequestCard from '../components/friend/FriendRequestCard';
@@ -7,6 +7,8 @@ import GroupInvitationCard from '../components/friend/GroupInvitationCard';
 import GroupJoinRequestCard from '../components/group/GroupJoinRequestCard';
 import { friendApi } from '../api/friend';
 import { groupApi } from '../api/group';
+import { updateNotificationCounts } from '../utils/notificationStore';
+import { loadReadStatus, markAsRead } from '../utils/notificationReadStore';
 import useUserCache from '../hooks/useUserCache';
 
 const { Title, Text } = Typography;
@@ -19,7 +21,7 @@ const FriendRequests = () => {
   const [mainTab, setMainTab] = useState('friend');
   // subTab: 'received' | 'sent'
   const [subTab, setSubTab] = useState('received');
-  
+
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
@@ -28,27 +30,167 @@ const FriendRequests = () => {
   const [workingRequestId, setWorkingRequestId] = useState(null);
 
   const [groupCache, setGroupCache] = useState({});
+  const [badgeCounts, setBadgeCounts] = useState({
+    friendReceived: 0,
+    friendSent: 0,
+    groupReceived: 0,
+    groupSent: 0,
+    joinReceived: 0,
+    joinSent: 0
+  });
+
+  const getPendingItems = (res) => {
+    if (!res) return [];
+    const list = Array.isArray(res)
+      ? res
+      : Array.isArray(res.list)
+        ? res.list
+        : Array.isArray(res.data?.list)
+          ? res.data.list
+          : [];
+    return list.filter((item) => Number(item?.status) === 0);
+  };
+
+  const checkActiveGroups = async (items) => {
+    if (!items.length) return 0;
+    // Extract unique group IDs
+    const groupIds = [...new Set(items.map(it => it.groupId).filter(Boolean))];
+    if (!groupIds.length) return items.length;
+
+    try {
+      // Check cache first or fetch
+      const activeGroupIds = new Set();
+      await Promise.all(groupIds.map(async (gid) => {
+        const sid = String(gid);
+        // If cached and status is 2, it's inactive except if we fetch again?
+        // Safer to just fetch or use cache if explicitly known status
+        // For accuracy, we might want to fetch, but let's check cache first if available
+        // Actually, let's fetch to be sure, or leverage fetchGroupDetails logic?
+        // Simple fetch for now.
+        try {
+          const res = await groupApi.getDetails(gid);
+          const info = res?.group || res?.data || res;
+          if (info && info.status !== 2) {
+            activeGroupIds.add(sid);
+          }
+        } catch (e) {
+          // If fetch fails, assume active or handle error? Assume active to avoid missing notifications?
+          // OR assume inactive? Let's assume active if error is network, but assume inactive if 404.
+          // For now, let's just log and add to active (conservative).
+          console.warn('Check group status failed', gid, e);
+          activeGroupIds.add(sid);
+        }
+      }));
+
+      return items.filter(it => activeGroupIds.has(String(it.groupId))).length;
+    } catch {
+      return items.length;
+    }
+  };
+
+  const getProcessedItems = (res) => {
+    if (!res) return [];
+    const list = Array.isArray(res)
+      ? res
+      : Array.isArray(res.list)
+        ? res.list
+        : Array.isArray(res.data?.list)
+          ? res.data.list
+          : [];
+    // Status 1 = accepted, 2 = rejected
+    return list.filter((item) => Number(item?.status) === 1 || Number(item?.status) === 2);
+  };
+
+  const refreshBadgeCounts = async () => {
+    try {
+      // Fetch both received (pending) and sent (processed) requests/invitations
+      const [
+        friendReceivedRes,
+        friendSentRes,
+        groupReceivedRes,
+        groupSentRes,
+        joinReceivedRes,
+        joinSentRes
+      ] = await Promise.all([
+        friendApi.getReceivedRequests(1, 200).catch(() => null),
+        friendApi.getSentRequests(1, 200).catch(() => null),
+        groupApi.getReceivedInvitations(1, 200).catch(() => null),
+        groupApi.getSentInvitations(1, 200).catch(() => null),
+        groupApi.getReceivedJoinRequests(1, 200).catch(() => null),
+        groupApi.getSentJoinRequests(1, 200).catch(() => null),
+      ]);
+
+      // Load read status
+      const readStatus = loadReadStatus();
+
+      // For friend requests: pending received + unread processed sent
+      const friendReceivedPending = getPendingItems(friendReceivedRes);
+      const friendSentProcessed = getProcessedItems(friendSentRes).filter(
+        item => !readStatus.friendSent.includes(item.id)
+      );
+
+      // For group invitations: pending received + unread processed sent (filter out dismissed groups)
+      const groupReceivedPending = getPendingItems(groupReceivedRes);
+      const groupSentProcessed = getProcessedItems(groupSentRes).filter(
+        item => !readStatus.groupSent.includes(item.id)
+      );
+
+      const [groupReceivedCount, groupSentCount] = await Promise.all([
+        checkActiveGroups(groupReceivedPending),
+        checkActiveGroups(groupSentProcessed)
+      ]);
+
+      // For join requests: pending received + unread processed sent (filter out dismissed groups)
+      const joinReceivedPending = getPendingItems(joinReceivedRes);
+      const joinSentProcessed = getProcessedItems(joinSentRes).filter(
+        item => !readStatus.joinSent.includes(item.id)
+      );
+
+      const [joinReceivedCount, joinSentCount] = await Promise.all([
+        checkActiveGroups(joinReceivedPending),
+        checkActiveGroups(joinSentProcessed)
+      ]);
+
+      const next = {
+        friendReceived: friendReceivedPending.length,
+        friendSent: friendSentProcessed.length,
+        groupReceived: groupReceivedCount,
+        groupSent: groupSentCount,
+        joinReceived: joinReceivedCount,
+        joinSent: joinSentCount,
+      };
+      setBadgeCounts(next);
+
+      // For MainLayout notification count, use totals
+      const totalFriend = next.friendReceived + next.friendSent;
+      const totalGroup = next.groupReceived + next.groupSent;
+      const totalJoin = next.joinReceived + next.joinSent;
+      updateNotificationCounts({ friend: totalFriend, group: totalGroup, joinReceived: totalJoin });
+    } catch (e) {
+      console.error('Refresh badges failed', e);
+    }
+  };
 
   const fetchGroupDetails = async (items) => {
     const ids = new Set();
     items.forEach(item => {
       if (item.groupId) ids.add(String(item.groupId));
     });
-    
+
     const missingIds = Array.from(ids).filter(id => !groupCache[id]);
     if (missingIds.length === 0) return;
 
     try {
       const results = await Promise.all(missingIds.map(id => groupApi.getDetails(id).catch(() => null)));
-      
+
       setGroupCache(prev => {
         const next = { ...prev };
         results.forEach((res, index) => {
-             const id = missingIds[index];
-             const info = res?.group || res?.data || res;
-             if (info && info.groupId) {
-                 next[String(info.groupId)] = info;
-             }
+          const id = missingIds[index];
+          const info = res?.group || res?.data || res;
+          if (info && info.groupId) {
+            next[String(info.groupId)] = info;
+          }
         });
         return next;
       });
@@ -69,12 +211,14 @@ const FriendRequests = () => {
           : await friendApi.getSentRequests(p, pageSize);
       } else if (mTab === 'group') {
         data = sTab === 'received'
-            ? await groupApi.getReceivedInvitations(p, pageSize)
-            : await groupApi.getSentInvitations(p, pageSize);
-      } else if (mTab === 'join_request') {
-        data = await groupApi.getSentJoinRequests(p, pageSize);
+          ? await groupApi.getReceivedInvitations(p, pageSize)
+          : await groupApi.getSentInvitations(p, pageSize);
+      } else if (mTab === 'join') {
+        data = sTab === 'received'
+          ? await groupApi.getReceivedJoinRequests(p, pageSize)
+          : await groupApi.getSentJoinRequests(p, pageSize);
       }
-      
+
       let items = [];
       let totalCount = 0;
 
@@ -85,35 +229,54 @@ const FriendRequests = () => {
         items = data.list;
         totalCount = Number(data.total || data.totalCount || items.length);
       } else if (data && data.data && Array.isArray(data.data.list)) {
-         items = data.data.list;
-         totalCount = Number(data.data.total || items.length);
+        items = data.data.list;
+        totalCount = Number(data.data.total || items.length);
       }
 
       // Filter out invitations from join requests (backend might return mixed data)
-      if (mTab === 'join_request') {
-         items = items.filter(item => !item.inviterId);
+      if (mTab === 'join') {
+        items = items.filter(item => !item.inviterId);
       }
-      
+
       items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      
+
       setList(items);
       setTotal(totalCount);
 
       if (items.length > 0) {
         let ids = [];
         if (mTab === 'friend') {
-             ids = sTab === 'received' ? items.map((it) => it.fromUserId) : items.map((it) => it.toUserId);
+          ids = sTab === 'received' ? items.map((it) => it.fromUserId) : items.map((it) => it.toUserId);
         } else if (mTab === 'group') {
-             const inviters = items.map(it => it.inviterId);
-             const invitees = items.map(it => it.inviteeId);
-             ids = [...new Set([...inviters, ...invitees])];
-        } else if (mTab === 'join_request') {
-             ids = items.map(it => it.handlerId).filter(id => id > 0);
+          const inviters = items.map(it => it.inviterId);
+          const invitees = items.map(it => it.inviteeId);
+          ids = [...new Set([...inviters, ...invitees])];
+        } else if (mTab === 'join') {
+          if (sTab === 'received') {
+            // For received join requests, we need the applicant's info
+            ids = items.map(it => it.userId).filter(id => id > 0);
+          } else {
+            // For sent join requests, we need the handler's info
+            ids = items.map(it => it.handlerId).filter(id => id > 0);
+          }
         }
         if (ids.length) await ensureUsers(ids);
 
-        if (mTab === 'group' || mTab === 'join_request') {
-           await fetchGroupDetails(items);
+        if (mTab === 'group' || mTab === 'join') {
+          await fetchGroupDetails(items);
+        }
+      }
+
+      // Mark as read when viewing sent processed items
+      if (sTab === 'sent' && items.length > 0) {
+        const processedIds = items
+          .filter(item => Number(item?.status) === 1 || Number(item?.status) === 2)
+          .map(item => item.id);
+
+        if (processedIds.length > 0) {
+          markAsRead(mTab, processedIds);
+          // Refresh badge counts to update the UI
+          setTimeout(() => refreshBadgeCounts(), 100);
         }
       }
     } finally {
@@ -123,6 +286,7 @@ const FriendRequests = () => {
 
   useEffect(() => {
     load(mainTab, subTab, page);
+    refreshBadgeCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mainTab, subTab, page]);
 
@@ -130,13 +294,26 @@ const FriendRequests = () => {
     setWorkingRequestId(item.id);
     try {
       if (mainTab === 'friend') {
-          await friendApi.handleRequest(item.id, act);
+        await friendApi.handleRequest(item.id, act);
       } else if (mainTab === 'group') {
-          await groupApi.handleInvitation({ invitationId: item.id, action: act });
+        await groupApi.handleInvitation({ invitationId: item.id, action: act });
+      } else if (mainTab === 'join') {
+        await groupApi.handleJoinRequest({ requestId: item.id, action: act });
       }
       message.success(act === 1 ? '已同意' : '已拒绝');
+      if (subTab === 'received' && Number(item?.status) === 0) {
+        setBadgeCounts((prev) => {
+          const next = { ...prev };
+          if (mainTab === 'friend') next.friend = Math.max(0, (prev.friend || 0) - 1);
+          if (mainTab === 'group') next.group = Math.max(0, (prev.group || 0) - 1);
+          if (mainTab === 'join') next.joinReceived = Math.max(0, (prev.joinReceived || 0) - 1);
+          updateNotificationCounts({ friend: next.friend, group: next.group, joinReceived: next.joinReceived });
+          return next;
+        });
+      }
       await load(mainTab, subTab, page);
-    } catch(e) {
+      refreshBadgeCounts();
+    } catch (e) {
       console.error(e);
       message.error('操作失败');
     } finally {
@@ -150,52 +327,58 @@ const FriendRequests = () => {
   };
 
   const renderItem = (item) => {
-      if (mainTab === 'friend') {
-        const uid = subTab === 'received' ? item.fromUserId : item.toUserId;
-        const user = getUser(uid);
-        return (
-            <FriendRequestCard
-              request={item}
-              user={user}
-              mode={subTab}
-              working={workingRequestId === item.id}
-              onAccept={() => action(item, 1)}
-              onReject={() => action(item, 2)}
-            />
-        );
-      } else if (mainTab === 'group') {
-        const uid = subTab === 'received' ? item.inviterId : item.inviteeId;
-        const user = getUser(uid);
-        const groupInfo = groupCache[String(item.groupId)];
-        const invitationWithGroup = groupInfo ? {
-            ...item,
-            groupName: groupInfo.name || item.groupName,
-            groupAvatar: groupInfo.avatar || item.groupAvatar
-        } : item;
+    if (mainTab === 'friend') {
+      const uid = subTab === 'received' ? item.fromUserId : item.toUserId;
+      const user = getUser(uid);
+      return (
+        <FriendRequestCard
+          request={item}
+          user={user}
+          mode={subTab}
+          working={workingRequestId === item.id}
+          onAccept={() => action(item, 1)}
+          onReject={() => action(item, 2)}
+        />
+      );
+    } else if (mainTab === 'group') {
+      const uid = subTab === 'received' ? item.inviterId : item.inviteeId;
+      const user = getUser(uid);
+      const groupInfo = groupCache[String(item.groupId)];
+      const invitationWithGroup = groupInfo ? {
+        ...item,
+        groupName: groupInfo.name || item.groupName,
+        groupAvatar: groupInfo.avatar || item.groupAvatar
+      } : item;
 
-        return (
-            <GroupInvitationCard
-              invitation={invitationWithGroup}
-              user={user}
-              mode={subTab}
-              working={workingRequestId === item.id}
-              onAccept={() => action(item, 1)}
-              onReject={() => action(item, 2)}
-              onEnterGroup={() => handleEnterGroup(item.groupId)}
-            />
-        );
-      } else if (mainTab === 'join_request') {
-        const groupInfo = groupCache[String(item.groupId)];
-        return (
-          <GroupJoinRequestCard
-            request={item}
-            group={groupInfo} 
-            mode="sent"
-            working={false}
-            onEnterGroup={() => handleEnterGroup(item.groupId)}
-          />
-        );
-      }
+      return (
+        <GroupInvitationCard
+          invitation={invitationWithGroup}
+          user={user}
+          mode={subTab}
+          groupStatus={groupInfo?.status}
+          working={workingRequestId === item.id}
+          onAccept={() => action(item, 1)}
+          onReject={() => action(item, 2)}
+          onEnterGroup={() => handleEnterGroup(item.groupId)}
+        />
+      );
+    } else if (mainTab === 'join') {
+      const isReceived = subTab === 'received';
+      const groupInfo = groupCache[String(item.groupId)];
+      const user = isReceived ? getUser(item.userId) : null;
+      return (
+        <GroupJoinRequestCard
+          request={item}
+          user={user}
+          group={groupInfo}
+          mode={subTab}
+          working={workingRequestId === item.id}
+          onAccept={isReceived ? () => action(item, 1) : undefined}
+          onReject={isReceived ? () => action(item, 2) : undefined}
+          onEnterGroup={() => handleEnterGroup(item.groupId)}
+        />
+      );
+    }
   };
 
   return (
@@ -208,46 +391,104 @@ const FriendRequests = () => {
           <Text type="secondary" style={{ fontSize: 16 }}>好友申请 · 群组邀请 · 入群申请</Text>
         </div>
 
-        <div style={{ 
-          background: '#fff', 
-          borderRadius: 24, 
-          padding: '24px', 
+        <div style={{
+          background: '#fff',
+          borderRadius: 24,
+          padding: '24px',
           boxShadow: '0 4px 20px rgba(0,0,0,0.03)',
-          minHeight: 400 
+          minHeight: 400
         }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 24 }}>
-             <Tabs
-                activeKey={mainTab}
-                onChange={(k) => {
-                    setMainTab(k);
-                    setPage(1);
-                }}
-                items={[
-                    { key: 'friend', label: '好友申请' },
-                    { key: 'group', label: '群组邀请' },
-                    { key: 'join_request', label: '我的入群申请' },
-                ]}
-                size="large"
-                centered
-                style={{ width: '100%', marginBottom: 16 }}
-                tabBarStyle={{ borderBottom: '1px solid #f1f5f9' }}
+            <Tabs
+              activeKey={mainTab}
+              onChange={(k) => {
+                setMainTab(k);
+                setPage(1);
+              }}
+              items={[
+                {
+                  key: 'friend',
+                  label: (
+                    <Space size={6}>
+                      <span>好友申请</span>
+                      {(badgeCounts.friendReceived + badgeCounts.friendSent) > 0 ?
+                        <Badge count={badgeCounts.friendReceived + badgeCounts.friendSent} size="small" /> : null}
+                    </Space>
+                  )
+                },
+                {
+                  key: 'group',
+                  label: (
+                    <Space size={6}>
+                      <span>群组邀请</span>
+                      {(badgeCounts.groupReceived + badgeCounts.groupSent) > 0 ?
+                        <Badge count={badgeCounts.groupReceived + badgeCounts.groupSent} size="small" /> : null}
+                    </Space>
+                  )
+                },
+                {
+                  key: 'join',
+                  label: (
+                    <Space size={6}>
+                      <span>入群申请</span>
+                      {(badgeCounts.joinReceived + badgeCounts.joinSent) > 0 ?
+                        <Badge count={badgeCounts.joinReceived + badgeCounts.joinSent} size="small" /> : null}
+                    </Space>
+                  )
+                },
+              ]}
+              size="large"
+              centered
+              style={{ width: '100%', marginBottom: 16 }}
+              tabBarStyle={{ borderBottom: '1px solid #f1f5f9' }}
             />
 
-            {mainTab !== 'join_request' && (
-              <Radio.Group 
-                  value={subTab} 
-                  onChange={e => {
-                      setSubTab(e.target.value);
-                      setPage(1);
-                  }}
-                  buttonStyle="solid"
-                  size="middle"
-                  style={{ marginBottom: 8 }}
-              >
-                  <Radio.Button value="received">收到的</Radio.Button>
-                  <Radio.Button value="sent">发出的</Radio.Button>
-              </Radio.Group>
-            )}
+            {/* Only three tabs now: friend, group, join */}
+            <Radio.Group
+              value={subTab}
+              onChange={e => {
+                setSubTab(e.target.value);
+                setPage(1);
+              }}
+              buttonStyle="solid"
+              size="middle"
+              style={{ marginBottom: 8 }}
+            >
+              <Radio.Button value="received">
+                {mainTab === 'friend' || mainTab === 'group' || mainTab === 'join' ? (
+                  <Badge
+                    count={
+                      mainTab === 'friend' ? badgeCounts.friendReceived :
+                        mainTab === 'group' ? badgeCounts.groupReceived :
+                          badgeCounts.joinReceived
+                    }
+                    size="small"
+                    offset={[6, -2]}
+                  >
+                    <span>收到的</span>
+                  </Badge>
+                ) : (
+                  '收到的'
+                )}
+              </Radio.Button>
+              <Radio.Button value="sent">
+                {mainTab === 'friend' || mainTab === 'group' || mainTab === 'join' ? (
+                  <Badge
+                    count={
+                      mainTab === 'friend' ? badgeCounts.friendSent :
+                        mainTab === 'group' ? badgeCounts.groupSent :
+                          badgeCounts.joinSent
+                    }
+                    size="small"
+                    offset={[6, -2]}
+                  >
+                    <span>发出的</span>
+                  </Badge>
+                ) : (
+                  '发出的'
+                )}
+              </Radio.Button>
+            </Radio.Group>
           </div>
 
           <List
@@ -265,11 +506,11 @@ const FriendRequests = () => {
               style: { textAlign: 'center', marginTop: 24 },
             }}
             renderItem={(item) => (
-                <List.Item style={{ padding: 0 }}>
-                    <div style={{ width: '100%' }}>
-                      {renderItem(item)}
-                    </div>
-                </List.Item>
+              <List.Item style={{ padding: 0 }}>
+                <div style={{ width: '100%' }}>
+                  {renderItem(item)}
+                </div>
+              </List.Item>
             )}
           />
         </div>

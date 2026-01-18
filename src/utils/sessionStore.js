@@ -66,6 +66,10 @@ export const onSessionsUpdated = (cb) => {
   return () => window.removeEventListener(EVENT_NAME, handler);
 };
 
+export const replaceSessionsMeta = (meta) => {
+  saveSessionsMeta(meta || {});
+  emitSessionsUpdated();
+};
+
 export const getFriendSessionKey = (friendId) => `f-${String(friendId)}`;
 export const getGroupSessionKey = (groupId) => `g-${String(groupId)}`;
-

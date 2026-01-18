@@ -11,18 +11,18 @@ export const groupApi = {
   update: (data) => request.post(`${GROUP_API_BASE}/update`, data),
 
   // Get list of joined groups
-  getList: (page = 1, pageSize = 20) => 
+  getList: (page = 1, pageSize = 20) =>
     request.get(`${GROUP_API_BASE}/list`, { params: { page, pageSize } }),
 
   // Get group details
   getDetails: (groupId) => request.get(`${GROUP_API_BASE}/${groupId}`),
 
   // Invite members
-  invite: (groupId, memberIds) => 
+  invite: (groupId, memberIds) =>
     request.post(`${GROUP_MEMBER_API_BASE}/invite`, { groupId, memberIds }),
 
   // Kick member
-  kick: (groupId, memberId) => 
+  kick: (groupId, memberId) =>
     request.post(`${GROUP_MEMBER_API_BASE}/kick`, { groupId, memberId }),
 
   // Set mute (1 mute, 0 unmute)
@@ -43,7 +43,7 @@ export const groupApi = {
   read: (groupId, readSeq) => request.post(`${GROUP_API_BASE}/read`, { groupId, readSeq }),
 
   // Get group members
-  getMembers: (groupId, page = 1, pageSize = 20) => 
+  getMembers: (groupId, page = 1, pageSize = 20) =>
     request.get(`${GROUP_MEMBER_API_BASE}/list`, { params: { groupId, page, pageSize } }),
 
   // Precise search group
@@ -83,4 +83,8 @@ export const groupApi = {
   // Get sent join requests (user)
   getSentJoinRequests: (page = 1, pageSize = 20) =>
     request.get(`${GROUP_API_BASE}/join/sent`, { params: { page, pageSize } }),
+
+  // Get received join requests for all managed groups (admin/owner)
+  getReceivedJoinRequests: (page = 1, pageSize = 20) =>
+    request.get(`${GROUP_API_BASE}/join/received`, { params: { page, pageSize } }),
 };

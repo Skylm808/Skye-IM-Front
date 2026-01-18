@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover } from 'antd';
-import { 
-  UserOutlined, 
-  TeamOutlined, 
-  MessageOutlined, 
-  PlusOutlined, 
-  DeleteOutlined, 
+import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover, Badge } from 'antd';
+import {
+  UserOutlined,
+  TeamOutlined,
+  MessageOutlined,
+  PlusOutlined,
+  DeleteOutlined,
   ExclamationCircleOutlined,
   UserAddOutlined,
   ManOutlined,
@@ -37,7 +37,7 @@ const { confirm } = Modal;
 // Reusable User Card Component
 const UserDetailCard = ({ user, friend, navigate, onClose }) => {
   if (!user) return <Empty description="无法加载用户信息" />;
-  
+
   let genderText = '未知';
   let genderColor = 'default';
   let genderIcon = <QuestionOutlined />;
@@ -61,62 +61,64 @@ const UserDetailCard = ({ user, friend, navigate, onClose }) => {
 
   const signature = user.signature || '-';
   const formatTime = (ts) => {
-     if (!ts) return '-';
-     return new Date(Number(ts) * 1000).toLocaleString();
+    if (!ts) return '-';
+    const date = new Date(Number(ts) * 1000);
+    if (isNaN(date.getTime())) return '-';
+    return date.toLocaleString();
   };
 
   return (
-    <Card 
+    <Card
       style={{ width: '100%', maxWidth: 480, borderRadius: 24, boxShadow: '0 20px 40px rgba(0,0,0,0.08)', border: 'none', overflow: 'hidden' }}
       bodyStyle={{ padding: 0 }}
     >
       <div style={{ height: 120, background: 'linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%)' }}></div>
       <div style={{ padding: '0 32px 32px', textAlign: 'center', marginTop: -60 }}>
-        <Avatar 
-           size={120} 
-           src={user.avatar} 
-           icon={<UserOutlined />} 
-           style={{ border: '4px solid #fff', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+        <Avatar
+          size={120}
+          src={user.avatar}
+          icon={<UserOutlined />}
+          style={{ border: '4px solid #fff', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
         />
         <Title level={3} style={{ marginTop: 16, marginBottom: 4 }}>
           {friend?.remark || user.nickname || user.username}
         </Title>
         <Text type="secondary">@{user.username}</Text>
-        
+
         <div style={{ marginTop: 8 }}>
-           <Tag icon={user.status === 1 ? <CheckCircleOutlined /> : <StopOutlined />} color={user.status === 1 ? 'success' : 'error'}>
-              {user.status === 1 ? '状态正常' : '已禁用'}
-           </Tag>
+          <Tag icon={user.status === 1 ? <CheckCircleOutlined /> : <StopOutlined />} color={user.status === 1 ? 'success' : 'error'}>
+            {user.status === 1 ? '状态正常' : '已禁用'}
+          </Tag>
         </div>
-        
+
         {/* Signature below name */}
         {signature !== '-' && (
           <div style={{ marginTop: 16 }}>
             <Text type="secondary" italic>“{signature}”</Text>
           </div>
         )}
-        
+
         <div style={{ marginTop: 24, textAlign: 'left' }}>
-           <Descriptions column={1} bordered size="small" labelStyle={{ whiteSpace: 'nowrap', width: 'auto' }}>
-             <Descriptions.Item label={<Space><IdcardOutlined /> ID</Space>}>{user.id}</Descriptions.Item>
-             <Descriptions.Item label={<Space>{genderIcon} 性别</Space>}>
-                <Tag color={genderColor} style={{ marginRight: 0 }}>{genderText}</Tag>
-             </Descriptions.Item>
-             <Descriptions.Item label={<Space><HighlightOutlined /> 个性签名</Space>}>{signature}</Descriptions.Item>
-             <Descriptions.Item label={<Space><EnvironmentOutlined /> 地区</Space>}>{user.region || '-'}</Descriptions.Item>
-             <Descriptions.Item label={<Space><PhoneOutlined /> 电话</Space>}>{user.phone || '-'}</Descriptions.Item>
-             <Descriptions.Item label={<Space><MailOutlined /> 邮箱</Space>}>{user.email || '-'}</Descriptions.Item>
-             <Descriptions.Item label={<Space><CalendarOutlined /> 注册时间</Space>}>{formatTime(user.createdAt)}</Descriptions.Item>
-           </Descriptions>
+          <Descriptions column={1} bordered size="small" labelStyle={{ whiteSpace: 'nowrap', width: 'auto' }}>
+            <Descriptions.Item label={<Space><IdcardOutlined /> ID</Space>}>{user.id}</Descriptions.Item>
+            <Descriptions.Item label={<Space>{genderIcon} 性别</Space>}>
+              <Tag color={genderColor} style={{ marginRight: 0 }}>{genderText}</Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label={<Space><HighlightOutlined /> 个性签名</Space>}>{signature}</Descriptions.Item>
+            <Descriptions.Item label={<Space><EnvironmentOutlined /> 地区</Space>}>{user.region || '-'}</Descriptions.Item>
+            <Descriptions.Item label={<Space><PhoneOutlined /> 电话</Space>}>{user.phone || '-'}</Descriptions.Item>
+            <Descriptions.Item label={<Space><MailOutlined /> 邮箱</Space>}>{user.email || '-'}</Descriptions.Item>
+            <Descriptions.Item label={<Space><CalendarOutlined /> 注册时间</Space>}>{formatTime(user.createdAt)}</Descriptions.Item>
+          </Descriptions>
         </div>
-        
+
         <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', gap: 12 }}>
-           <Button type="primary" size="large" block icon={<MessageOutlined />} onClick={handleSendMessage}>
-             发消息
-           </Button>
-           {friend && !friend.isSelf && (
-             <Button size="large" block danger type="text">删除好友</Button>
-           )}
+          <Button type="primary" size="large" block icon={<MessageOutlined />} onClick={handleSendMessage}>
+            发消息
+          </Button>
+          {friend && !friend.isSelf && (
+            <Button size="large" block danger type="text">删除好友</Button>
+          )}
         </div>
       </div>
     </Card>
@@ -130,10 +132,10 @@ const GroupMemberItem = ({ member, user, isOwner, isMe, onKick, navigate }) => {
 
   // Styling for the member card
   const itemStyle = {
-    textAlign: 'center', 
-    position: 'relative', 
-    padding: '16px 8px', 
-    background: '#f8fafc', 
+    textAlign: 'center',
+    position: 'relative',
+    padding: '16px 8px',
+    background: '#f8fafc',
     border: '1px solid #e2e8f0',
     borderRadius: 12,
     boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
@@ -171,31 +173,31 @@ const GroupMemberItem = ({ member, user, isOwner, isMe, onKick, navigate }) => {
           {member.nickname || user?.nickname || user?.username}
         </div>
         <div style={{ marginTop: 6, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-           {member.role === 1 && (
-             <Tag color="gold" style={{ margin: 0, marginInlineEnd: 0, marginBottom: 0, height: 22, lineHeight: '22px' }}>
-               群主
-             </Tag>
-           )}
-           {member.role === 2 && (
-             <Tag color="blue" style={{ margin: 0, marginInlineEnd: 0, marginBottom: 0, height: 22, lineHeight: '22px' }}>
-               管理员
-             </Tag>
-           )}
-           {isMuted && (
-             <Tag color="red" style={{ margin: 0, marginInlineStart: 6, marginBottom: 0, height: 22, lineHeight: '22px' }}>
-               禁言
-             </Tag>
-           )}
+          {member.role === 1 && (
+            <Tag color="gold" style={{ margin: 0, marginInlineEnd: 0, marginBottom: 0, height: 22, lineHeight: '22px' }}>
+              群主
+            </Tag>
+          )}
+          {member.role === 2 && (
+            <Tag color="blue" style={{ margin: 0, marginInlineEnd: 0, marginBottom: 0, height: 22, lineHeight: '22px' }}>
+              管理员
+            </Tag>
+          )}
+          {isMuted && (
+            <Tag color="red" style={{ margin: 0, marginInlineStart: 6, marginBottom: 0, height: 22, lineHeight: '22px' }}>
+              禁言
+            </Tag>
+          )}
         </div>
         {isOwner && !isMe && (
-          <div 
+          <div
             style={{ position: 'absolute', top: 4, right: 4 }}
-            onClick={(e) => { 
-              e.stopPropagation(); 
-              onKick(member.userId); 
+            onClick={(e) => {
+              e.stopPropagation();
+              onKick(member.userId);
             }}
           >
-             <DeleteOutlined style={{ color: '#ef4444', fontSize: 12, padding: 4, cursor: 'pointer' }} />
+            <DeleteOutlined style={{ color: '#ef4444', fontSize: 12, padding: 4, cursor: 'pointer' }} />
           </div>
         )}
       </div>
@@ -234,14 +236,23 @@ const sortGroupMembers = (list) => {
     .map(({ m }) => m);
 };
 
+const normalizeGroupItem = (item) => {
+  if (!item || typeof item !== 'object') return null;
+  const groupId = item.groupId ?? item.groupID ?? item.group_id ?? item.id ?? item.groupIdStr;
+  const name = item.name ?? item.groupName ?? item.group_name;
+  const avatar = item.avatar ?? item.groupAvatar ?? item.group_avatar;
+  const ownerId = item.ownerId ?? item.owner_id ?? item.owner;
+  return { ...item, groupId, name, avatar, ownerId };
+};
+
 const Contacts = () => {
   const navigate = useNavigate();
-  const location = useLocation(); 
+  const location = useLocation();
   const { getUser, ensureUsers } = useUserCache();
-  
+
   const [activeTab, setActiveTab] = useState('friends');
-  const [selectedItem, setSelectedItem] = useState(null); 
-  
+  const [selectedItem, setSelectedItem] = useState(null);
+
   // Data
   const [friends, setFriends] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -267,7 +278,7 @@ const Contacts = () => {
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [inviteFriendId, setInviteFriendId] = useState(null);
   const [inviteMessage, setInviteMessage] = useState('');
-  
+
   const [createGroupForm] = Form.useForm();
 
   // Initial Fetch
@@ -282,8 +293,12 @@ const Contacts = () => {
 
       const gRes = await groupApi.getList(1, 100);
       // Filter out dismissed groups (status === 2)
-      setGroups((gRes.list || []).filter(g => g.status !== 2));
-      
+      const normalizedGroups = (gRes.list || [])
+        .map(normalizeGroupItem)
+        .filter(Boolean)
+        .filter(g => g.status !== 2);
+      setGroups(normalizedGroups);
+
     } catch (e) {
       console.error(e);
     }
@@ -294,9 +309,9 @@ const Contacts = () => {
   }, [fetchData]);
 
   useEffect(() => {
-     if (location.state?.view) {
-       setSelectedItem({ type: location.state.view });
-     }
+    if (location.state?.view) {
+      setSelectedItem({ type: location.state.view });
+    }
   }, [location.state]);
 
   // Fetch Group Members and Determine Role
@@ -304,7 +319,7 @@ const Contacts = () => {
     if (selectedItem?.type === 'group') {
       const currentGroupId = selectedItem.data.groupId;
       setGroupMembers([]); // Reset members immediately
-      
+
       // Optimistic role set if owner
       const isOwner = String(selectedItem.data.ownerId) === String(currentUser?.id);
       setMyRoleData({ groupId: currentGroupId, role: isOwner ? 1 : null });
@@ -313,17 +328,18 @@ const Contacts = () => {
         try {
           const res = await groupApi.getMembers(currentGroupId, 1, 50);
           const list = sortGroupMembers(res.list || []);
-          
+          const safeList = list.filter((m) => m && m.userId != null);
+
           // Only update if still on same group
           if (selectedItem.data.groupId === currentGroupId) {
-             setGroupMembers(list);
-             await ensureUsers(list.map(m => m.userId) || []);
+            setGroupMembers(safeList);
+            await ensureUsers(safeList.map(m => m.userId) || []);
 
-             // Accurate role check
-             const me = list.find(m => String(m.userId) === String(currentUser?.id));
-             if (me) {
-               setMyRoleData({ groupId: currentGroupId, role: me.role });
-             }
+            // Accurate role check
+            const me = safeList.find(m => String(m.userId) === String(currentUser?.id));
+            if (me) {
+              setMyRoleData({ groupId: currentGroupId, role: me.role });
+            }
           }
         } catch (e) {
           console.error(e);
@@ -336,24 +352,24 @@ const Contacts = () => {
   }, [selectedItem, ensureUsers, currentUser]);
 
   const currentGroupRole = useMemo(() => {
-      if (selectedItem?.type !== 'group') return null;
-      if (myRoleData && String(myRoleData.groupId) === String(selectedItem.data.groupId)) {
-          return myRoleData.role;
-      }
-      return null;
+    if (selectedItem?.type !== 'group') return null;
+    if (myRoleData && String(myRoleData.groupId) === String(selectedItem.data.groupId)) {
+      return myRoleData.role;
+    }
+    return null;
   }, [myRoleData, selectedItem]);
 
   const canManageJoinRequests = currentGroupRole === 1 || currentGroupRole === 2;
 
   const loadJoinRequests = useCallback(async (page = 1) => {
     if (selectedItem?.type !== 'group') return;
-    
+
     // Strict Permission Check
     // If role is not loaded yet or mismatch, currentGroupRole will be null/mismatch
     // and canManageJoinRequests will be false. 
     // But we double check here just in case caller bypassed it.
     if (!myRoleData || String(myRoleData.groupId) !== String(selectedItem.data.groupId)) {
-        return;
+      return;
     }
     const role = myRoleData.role;
     if (role !== 1 && role !== 2) return;
@@ -375,11 +391,11 @@ const Contacts = () => {
     } catch (e) {
       // Suppress permission error and 404 (Not Found)
       if (e?.response?.status === 404) {
-         console.warn('Join requests API not found (404), feature might be disabled on backend.');
-         setJoinRequests([]);
-         setJoinRequestsTotal(0);
+        console.warn('Join requests API not found (404), feature might be disabled on backend.');
+        setJoinRequests([]);
+        setJoinRequestsTotal(0);
       } else if (e?.response?.status !== 403 && !e?.message?.includes('只有群主')) {
-         console.error(e);
+        console.error(e);
       }
     } finally {
       setJoinRequestsLoading(false);
@@ -401,28 +417,28 @@ const Contacts = () => {
   };
 
   const onGlobalSelect = (value, option) => {
-     if (option.type === 'user') {
-       const existing = friends.find(f => f.friendId === option.data.id);
-       if (existing) {
-         setActiveTab('friends');
-         setSelectedItem({ type: 'friend', data: existing });
-       } else {
-         message.info('该用户不是好友，请先添加');
-         setSearchTab('user');
-         setIsSearchOpen(true);
-       }
-     } else {
-       const existing = groups.find(g => g.groupId === option.data.groupId);
-       if (existing) {
-         setActiveTab('groups');
-         setSelectedItem({ type: 'group', data: existing });
-       } else {
-         message.info('未加入该群，请先申请');
-         setSearchTab('group');
-         setIsSearchOpen(true);
-       }
-     }
-     setSearchText('');
+    if (option.type === 'user') {
+      const existing = friends.find(f => f.friendId === option.data.id);
+      if (existing) {
+        setActiveTab('friends');
+        setSelectedItem({ type: 'friend', data: existing });
+      } else {
+        message.info('该用户不是好友，请先添加');
+        setSearchTab('user');
+        setIsSearchOpen(true);
+      }
+    } else {
+      const existing = groups.find(g => g.groupId === option.data.groupId);
+      if (existing) {
+        setActiveTab('groups');
+        setSelectedItem({ type: 'group', data: existing });
+      } else {
+        message.info('未加入该群，请先申请');
+        setSearchTab('group');
+        setIsSearchOpen(true);
+      }
+    }
+    setSearchText('');
   };
 
   // Filtered Lists
@@ -434,23 +450,24 @@ const Contacts = () => {
     });
 
     if (currentUser) {
-       const name = currentUser.nickname || currentUser.username || '';
-       const selfName = `${name} (我)`;
-       if (!searchText || selfName.toLowerCase().includes(searchText.toLowerCase())) {
-           const selfItem = {
-               friendId: currentUser.id,
-               remark: selfName,
-               isSelf: true
-           };
-           return [selfItem, ...list];
-       }
+      const name = currentUser.nickname || currentUser.username || '';
+      const selfName = `${name} (我)`;
+      if (!searchText || selfName.toLowerCase().includes(searchText.toLowerCase())) {
+        const selfItem = {
+          friendId: currentUser.id,
+          remark: selfName,
+          isSelf: true
+        };
+        return [selfItem, ...list];
+      }
     }
     return list;
   }, [friends, currentUser, searchText, getUser]);
 
-  const filteredGroups = groups.filter(item => 
-    item.name.toLowerCase().includes(searchText.toLowerCase())
-  );
+  const filteredGroups = groups.filter(item => {
+    const name = item?.name || item?.groupName || '';
+    return name.toLowerCase().includes(searchText.toLowerCase());
+  });
 
   const handleCreateGroup = async (values) => {
     try {
@@ -464,7 +481,7 @@ const Contacts = () => {
       message.success('群组创建成功');
       setIsCreateGroupOpen(false);
       createGroupForm.resetFields();
-      fetchData(); 
+      fetchData();
     } catch {
       message.error('创建失败');
     }
@@ -496,20 +513,21 @@ const Contacts = () => {
         try {
           await groupApi.kick(selectedItem.data.groupId, memberId);
           message.success('已踢出');
-          
+
           // Optimistic update
-          setGroupMembers(prev => prev.filter(m => String(m.userId) !== String(memberId)));
-          
+          setGroupMembers(prev => prev.filter(m => m && String(m.userId) !== String(memberId)));
+
           // Re-fetch to be sure, with a slight delay for DB consistency
           setTimeout(async () => {
-             try {
-               const res = await groupApi.getMembers(selectedItem.data.groupId, 1, 50);
-               // Only update if we are still viewing the same group
-               if (selectedItem?.data?.groupId) {
-                  const list = sortGroupMembers(res.list || []);
-                  setGroupMembers(list);
-               }
-             } catch(e) { console.error(e); }
+            try {
+              const res = await groupApi.getMembers(selectedItem.data.groupId, 1, 50);
+              // Only update if we are still viewing the same group
+              if (selectedItem?.data?.groupId) {
+                const list = sortGroupMembers(res.list || []);
+                const safeList = list.filter((m) => m && m.userId != null);
+                setGroupMembers(safeList);
+              }
+            } catch (e) { console.error(e); }
           }, 500);
         } catch {
           message.error('操作失败');
@@ -575,15 +593,15 @@ const Contacts = () => {
     if (!friend || !friend.friendId) return <Empty description="无法加载好友信息" />;
     let u = getUser(friend.friendId);
     if (friend.isSelf && currentUser) u = currentUser;
-    
+
     if (!u) {
-       return (
-         <div style={{ padding: 40, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Card loading style={{ width: '100%', maxWidth: 480, borderRadius: 24 }} />
-         </div>
-       );
+      return (
+        <div style={{ padding: 40, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Card loading style={{ width: '100%', maxWidth: 480, borderRadius: 24 }} />
+        </div>
+      );
     }
-    
+
     return (
       <div style={{ padding: 40, height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <UserDetailCard user={u} friend={friend} navigate={navigate} />
@@ -592,88 +610,92 @@ const Contacts = () => {
   };
 
   const renderGroupDetail = (group) => {
-    const role = currentGroupRole || (String(group.ownerId) === String(currentUser?.id) ? 1 : null);
+    const safeGroup = normalizeGroupItem(group);
+    if (!safeGroup || !safeGroup.groupId) {
+      return <Empty description="无法加载群组信息" />;
+    }
+    const role = currentGroupRole || (String(safeGroup.ownerId) === String(currentUser?.id) ? 1 : null);
     const isOwner = role === 1;
     const canManageGroup = role === 1 || role === 2;
-    const sortedMembers = sortGroupMembers(groupMembers);
+    const sortedMembers = sortGroupMembers(groupMembers).filter((m) => m && m.userId != null);
     const pendingJoinCount = joinRequests.filter((req) => req.status === 0).length;
-    
+
     // Stats
-    const memberCount = groupMembers.length || group.memberCount || 0;
-    const maxMembers = group.maxMembers || 200;
+    const memberCount = groupMembers.length || safeGroup.memberCount || 0;
+    const maxMembers = safeGroup.maxMembers || 200;
 
     return (
       <div style={{ height: '100%', overflowY: 'auto' }}>
         {/* Hero Header */}
-        <div style={{ 
-           background: 'linear-gradient(135deg, #eff6ff 0%, #fff 100%)', 
-           padding: '40px 32px 32px',
-           borderBottom: '1px solid #f1f5f9'
+        <div style={{
+          background: 'linear-gradient(135deg, #eff6ff 0%, #fff 100%)',
+          padding: '40px 32px 32px',
+          borderBottom: '1px solid #f1f5f9'
         }}>
-           <div style={{ maxWidth: 800, margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-              <Avatar 
-                shape="square" 
-                size={100} 
-                src={group.avatar} 
-                icon={<TeamOutlined />} 
-                style={{ borderRadius: 24, boxShadow: '0 8px 24px rgba(14, 165, 233, 0.15)', border: '4px solid #fff' }} 
-              />
-              
-              <Title level={2} style={{ marginTop: 20, marginBottom: 8 }}>{group.name}</Title>
-              <Space style={{ marginBottom: 16 }}>
-                 <Tag bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>ID: {group.groupId}</Tag>
-                 {isOwner && <Tag color="gold" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>我是群主</Tag>}
-                 {!isOwner && role === 2 && <Tag color="blue" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>管理员</Tag>}
-              </Space>
-              
-              <Text type="secondary" style={{ maxWidth: 500, lineHeight: 1.6 }}>
-                {group.description || '暂无群简介'}
-              </Text>
+          <div style={{ maxWidth: 800, margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+            <Avatar
+              shape="square"
+              size={100}
+              src={safeGroup.avatar}
+              icon={<TeamOutlined />}
+              style={{ borderRadius: 24, boxShadow: '0 8px 24px rgba(14, 165, 233, 0.15)', border: '4px solid #fff' }}
+            />
 
-              {/* Action Bar */}
-              <div style={{ display: 'flex', gap: 16, marginTop: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
-                 <Button 
-                   type="primary" 
-                   size="large" 
-                   shape="round"
-                   icon={<MessageOutlined />} 
-                   onClick={() => navigate(`/chat?type=group&id=${group.groupId}`)}
-                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
-                 >
-                   进入群聊
-                 </Button>
-                 
-                 <Button 
-                   size="large" 
-                   shape="round" 
-                   icon={<UserAddOutlined />} 
-                   onClick={() => {
-                      setInviteFriendId(null);
-                      setInviteMessage('');
-                      setIsInviteOpen(true);
-                   }}
-                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
-                 >
-                   邀请成员
-                 </Button>
-                 
-                 <Button 
-                   size="large" 
-                   shape="round" 
-                   danger
-                   icon={isOwner ? <DeleteOutlined /> : <StopOutlined />} 
-                   onClick={isOwner ? handleDismissGroup : handleQuitGroup}
-                   style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
-                 >
-                   {isOwner ? '解散群组' : '退出群组'}
-                 </Button>
-              </div>
-           </div>
+            <Title level={2} style={{ marginTop: 20, marginBottom: 8 }}>{safeGroup.name || '未命名群组'}</Title>
+            <Space style={{ marginBottom: 16 }}>
+              <Tag bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>ID: {safeGroup.groupId}</Tag>
+              {isOwner && <Tag color="gold" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>我是群主</Tag>}
+              {!isOwner && role === 2 && <Tag color="blue" bordered={false} style={{ fontSize: 13, padding: '4px 8px' }}>管理员</Tag>}
+            </Space>
+
+            <Text type="secondary" style={{ maxWidth: 500, lineHeight: 1.6 }}>
+              {safeGroup.description || safeGroup.groupDesc || '暂无群简介'}
+            </Text>
+
+            {/* Action Bar */}
+            <div style={{ display: 'flex', gap: 16, marginTop: 32, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Button
+                type="primary"
+                size="large"
+                shape="round"
+                icon={<MessageOutlined />}
+                onClick={() => navigate(`/chat?type=group&id=${safeGroup.groupId}`)}
+                style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+              >
+                进入群聊
+              </Button>
+
+              <Button
+                size="large"
+                shape="round"
+                icon={<UserAddOutlined />}
+                onClick={() => {
+                  setInviteFriendId(null);
+                  setInviteMessage('');
+                  setIsInviteOpen(true);
+                }}
+                style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+              >
+                邀请成员
+              </Button>
+
+              <Button
+                size="large"
+                shape="round"
+                danger
+                icon={isOwner ? <DeleteOutlined /> : <StopOutlined />}
+                onClick={isOwner ? handleDismissGroup : handleQuitGroup}
+                style={{ height: 48, paddingLeft: 24, paddingRight: 24, fontSize: 16 }}
+              >
+                {isOwner ? '解散群组' : '退出群组'}
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* Content Section */}
         <div style={{ maxWidth: 1000, margin: '0 auto', padding: '32px' }}>
-          
+
           {/* Join Requests (Admin Only) */}
           {canManageJoinRequests && (
             <Card
@@ -691,68 +713,68 @@ const Contacts = () => {
                 </Button>
               }
             >
-               {joinRequests.length > 0 ? (
-                 <List
-                    loading={joinRequestsLoading}
-                    dataSource={joinRequests}
-                    rowKey="id"
-                    split={false}
-                    pagination={{
-                      current: joinRequestsPage,
-                      pageSize: joinRequestsPageSize,
-                      total: joinRequestsTotal,
-                      showSizeChanger: false,
-                      onChange: (page) => loadJoinRequests(page),
-                      align: 'center'
-                    }}
-                    renderItem={(item) => {
-                      const u = getUser(item.userId);
-                      return (
-                        <div style={{ marginBottom: 12 }}>
-                          <GroupJoinRequestCard
-                            request={item}
-                            user={u}
-                            group={group}
-                            mode="received"
-                            working={workingJoinRequestId === item.id}
-                            onAccept={() => handleJoinRequestAction(item.id, 1)}
-                            onReject={() => handleJoinRequestAction(item.id, 2)}
-                          />
-                        </div>
-                      );
-                    }}
-                 />
-               ) : (
-                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无申请记录" />
-               )}
+              {joinRequests.length > 0 ? (
+                <List
+                  loading={joinRequestsLoading}
+                  dataSource={joinRequests}
+                  rowKey="id"
+                  split={false}
+                  pagination={{
+                    current: joinRequestsPage,
+                    pageSize: joinRequestsPageSize,
+                    total: joinRequestsTotal,
+                    showSizeChanger: false,
+                    onChange: (page) => loadJoinRequests(page),
+                    align: 'center'
+                  }}
+                  renderItem={(item) => {
+                    const u = getUser(item.userId);
+                    return (
+                      <div style={{ marginBottom: 12 }}>
+                        <GroupJoinRequestCard
+                          request={item}
+                          user={u}
+                          group={safeGroup}
+                          mode="received"
+                          working={workingJoinRequestId === item.id}
+                          onAccept={() => handleJoinRequestAction(item.id, 1)}
+                          onReject={() => handleJoinRequestAction(item.id, 2)}
+                        />
+                      </div>
+                    );
+                  }}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无申请记录" />
+              )}
             </Card>
           )}
 
           {/* Members Grid */}
           <div>
-             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-                <Title level={4} style={{ margin: 0 }}>群成员</Title>
-                <Tag style={{ fontSize: 14, padding: '4px 10px', borderRadius: 12 }}>{memberCount} / {maxMembers}</Tag>
-             </div>
-             
-             <Row gutter={[16, 16]}>
-               {sortedMembers.map(m => {
-                 const u = getUser(m.userId);
-                 const isMe = m.userId === currentUser?.id;
-                 return (
-                   <Col xs={12} sm={8} md={6} lg={4} xl={4} xxl={3} key={m.userId}>
-                     <GroupMemberItem 
-                       member={m}
-                       user={u}
-                       isOwner={canManageGroup}
-                       isMe={isMe}
-                       onKick={handleKick}
-                       navigate={navigate}
-                     />
-                   </Col>
-                 );
-               })}
-             </Row>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+              <Title level={4} style={{ margin: 0 }}>群成员</Title>
+              <Tag style={{ fontSize: 14, padding: '4px 10px', borderRadius: 12 }}>{memberCount} / {maxMembers}</Tag>
+            </div>
+
+            <Row gutter={[16, 16]}>
+              {sortedMembers.map(m => {
+                const u = getUser(m.userId);
+                const isMe = m.userId === currentUser?.id;
+                return (
+                  <Col xs={12} sm={8} md={6} lg={4} xl={4} xxl={3} key={m.userId}>
+                    <GroupMemberItem
+                      member={m}
+                      user={u}
+                      isOwner={canManageGroup}
+                      isMe={isMe}
+                      onKick={handleKick}
+                      navigate={navigate}
+                    />
+                  </Col>
+                );
+              })}
+            </Row>
           </div>
         </div>
       </div>
@@ -769,15 +791,15 @@ const Contacts = () => {
         { label: '搜索群组', icon: <TeamOutlined />, key: 'search_group', onClick: () => { setSearchTab('group'); setIsSearchOpen(true); } },
       ]}
       renderItem={item => (
-        <List.Item 
+        <List.Item
           onClick={item.onClick}
           style={{ cursor: 'pointer', padding: '8px 12px', borderBottom: 'none', transition: 'background 0.2s' }}
           onMouseEnter={(e) => e.currentTarget.style.background = '#f1f5f9'}
           onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
         >
           <Space>
-             {item.icon}
-             <Text>{item.label}</Text>
+            {item.icon}
+            <Text>{item.label}</Text>
           </Space>
         </List.Item>
       )}
@@ -788,120 +810,120 @@ const Contacts = () => {
     <MainLayout pageTitle="联系人">
       <Layout style={{ height: 'calc(100vh - 32px)', background: '#fff', borderRadius: 16, overflow: 'hidden', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' }}>
         <Sider width={280} theme="light" style={{ borderRight: '1px solid rgba(0,0,0,0.03)' }}>
-           <div style={{ padding: '20px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <GlobalSearchBox
-                popupMatchSelectWidth={250}
-                style={{ flex: 1 }}
-                value={searchText}
-                onChange={handleGlobalSearch}
-                onSelect={onGlobalSelect}
-                placeholder="搜索联系人/全局"
-              />
-              <Dropdown dropdownRender={() => <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>{addMenu}</div>} trigger={['click']}>
-                <Button icon={<PlusOutlined />} shape="circle" style={{ flexShrink: 0 }} />
-              </Dropdown>
-           </div>
-           
-           <Tabs 
-             activeKey={activeTab} 
-             onChange={setActiveTab} 
-             centered
-             tabBarStyle={{ marginBottom: 0, padding: '0 16px' }}
-             items={[
-               {
-                 key: 'friends',
-                 label: '好友',
-                 children: (
-                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
-                     <List
-                       dataSource={filteredFriends}
-                       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
-                       renderItem={item => {
-                         let u = getUser(item.friendId);
-                         if (item.isSelf && currentUser) {
-                           u = currentUser;
-                         }
-                         const isSelected = selectedItem?.type === 'friend' && selectedItem?.data.friendId === item.friendId;
-                         return (
-                           <div style={{ padding: '4px 12px' }}>
-                             <div 
-                               onClick={() => setSelectedItem({ type: 'friend', data: item })}
-                               style={{ 
-                                 padding: '10px 12px', 
-                                 cursor: 'pointer',
-                                 background: isSelected ? '#e0f2fe' : 'transparent',
-                                 borderRadius: 12,
-                                 display: 'flex',
-                                 alignItems: 'center',
-                                 gap: 12,
-                                 transition: 'all 0.2s'
-                               }}
-                             >
-                                <Avatar src={u?.avatar} icon={<UserOutlined />} style={{ border: '1px solid #f1f5f9' }} />
-                                <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
-                                  {item.remark || u?.nickname || u?.username}
-                                </Text>
-                             </div>
-                           </div>
-                         );
-                       }}
-                     />
-                   </div>
-                 )
-               },
-               {
-                 key: 'groups',
-                 label: '群组',
-                 children: (
-                   <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
-                      <List
-                       dataSource={filteredGroups}
-                       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
-                       renderItem={item => {
-                         const isSelected = selectedItem?.type === 'group' && selectedItem?.data.groupId === item.groupId;
-                         return (
-                           <div style={{ padding: '4px 12px' }}>
-                             <div 
-                               onClick={() => setSelectedItem({ type: 'group', data: item })}
-                               style={{ 
-                                 padding: '10px 12px', 
-                                 cursor: 'pointer',
-                                 background: isSelected ? '#e0f2fe' : 'transparent',
-                                 borderRadius: 12,
-                                 display: 'flex',
-                                 alignItems: 'center',
-                                 gap: 12,
-                                 transition: 'all 0.2s'
-                               }}
-                             >
-                                <Avatar shape="square" src={item.avatar} icon={<TeamOutlined />} style={{ borderRadius: 6 }} />
-                                <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
-                                  {item.name}
-                                </Text>
-                             </div>
-                           </div>
-                         );
-                       }}
-                     />
-                   </div>
-                 )
-               }
-             ]}
-           />
+          <div style={{ padding: '20px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <GlobalSearchBox
+              popupMatchSelectWidth={250}
+              style={{ flex: 1 }}
+              value={searchText}
+              onChange={handleGlobalSearch}
+              onSelect={onGlobalSelect}
+              placeholder="搜索联系人/全局"
+            />
+            <Dropdown dropdownRender={() => <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>{addMenu}</div>} trigger={['click']}>
+              <Button icon={<PlusOutlined />} shape="circle" style={{ flexShrink: 0 }} />
+            </Dropdown>
+          </div>
+
+          <Tabs
+            activeKey={activeTab}
+            onChange={setActiveTab}
+            centered
+            tabBarStyle={{ marginBottom: 0, padding: '0 16px' }}
+            items={[
+              {
+                key: 'friends',
+                label: '好友',
+                children: (
+                  <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
+                    <List
+                      dataSource={filteredFriends}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
+                      renderItem={item => {
+                        let u = getUser(item.friendId);
+                        if (item.isSelf && currentUser) {
+                          u = currentUser;
+                        }
+                        const isSelected = selectedItem?.type === 'friend' && selectedItem?.data.friendId === item.friendId;
+                        return (
+                          <div style={{ padding: '4px 12px' }}>
+                            <div
+                              onClick={() => setSelectedItem({ type: 'friend', data: item })}
+                              style={{
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                                background: isSelected ? '#e0f2fe' : 'transparent',
+                                borderRadius: 12,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 12,
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              <Avatar src={u?.avatar} icon={<UserOutlined />} style={{ border: '1px solid #f1f5f9' }} />
+                              <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
+                                {item.remark || u?.nickname || u?.username}
+                              </Text>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                  </div>
+                )
+              },
+              {
+                key: 'groups',
+                label: '群组',
+                children: (
+                  <div style={{ height: 'calc(100vh - 160px)', overflowY: 'auto', padding: '12px 0' }}>
+                    <List
+                      dataSource={filteredGroups}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无结果" /> }}
+                      renderItem={item => {
+                        const isSelected = selectedItem?.type === 'group' && selectedItem?.data.groupId === item.groupId;
+                        return (
+                          <div style={{ padding: '4px 12px' }}>
+                            <div
+                              onClick={() => setSelectedItem({ type: 'group', data: item })}
+                              style={{
+                                padding: '10px 12px',
+                                cursor: 'pointer',
+                                background: isSelected ? '#e0f2fe' : 'transparent',
+                                borderRadius: 12,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 12,
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              <Avatar shape="square" src={item.avatar} icon={<TeamOutlined />} style={{ borderRadius: 6 }} />
+                              <Text strong style={{ color: isSelected ? '#0284c7' : '#334155' }}>
+                                {item.name || item.groupName || item.groupId}
+                              </Text>
+                            </div>
+                          </div>
+                        );
+                      }}
+                    />
+                  </div>
+                )
+              }
+            ]}
+          />
         </Sider>
-        
+
         <Content style={{ overflowY: 'auto', background: '#f8fafc' }}>
-           {selectedItem ? (
-             selectedItem.type === 'friend' ? renderFriendDetail(selectedItem.data) :
-             selectedItem.type === 'group' ? renderGroupDetail(selectedItem.data) :
-             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未知类型" style={{ marginTop: 100 }} />
-           ) : (
-             <Empty 
-                image={Empty.PRESENTED_IMAGE_SIMPLE} 
-                description="选择联系人或群组查看详情" 
-                style={{ marginTop: 100, color: '#94a3b8' }} 
-             />
-           )}
+          {selectedItem ? (
+            selectedItem.type === 'friend' ? renderFriendDetail(selectedItem.data) :
+              selectedItem.type === 'group' ? renderGroupDetail(selectedItem.data) :
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未知类型" style={{ marginTop: 100 }} />
+          ) : (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="选择联系人或群组查看详情"
+              style={{ marginTop: 100, color: '#94a3b8' }}
+            />
+          )}
         </Content>
       </Layout>
 
@@ -939,17 +961,17 @@ const Contacts = () => {
         okButtonProps={{ disabled: !inviteFriendId }}
       >
         <List
-          dataSource={friends.filter(f => !groupMembers.some(m => m.userId === f.friendId))}
+          dataSource={friends.filter(f => !groupMembers.some(m => m && m.userId === f.friendId))}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可邀请的好友" /> }}
           pagination={{ pageSize: 5, size: 'small' }}
           renderItem={item => {
             const u = getUser(item.friendId);
             const isSelected = inviteFriendId === item.friendId;
             return (
-              <List.Item 
+              <List.Item
                 onClick={() => setInviteFriendId(item.friendId)}
-                style={{ 
-                  cursor: 'pointer', 
+                style={{
+                  cursor: 'pointer',
                   background: isSelected ? '#e0f2fe' : 'transparent',
                   padding: '8px 12px',
                   borderRadius: 8,
