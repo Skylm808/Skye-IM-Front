@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Avatar, Button, Card, Drawer, Empty, Input, List, Space, Table, Tag, Tabs, Typography, message } from 'antd';
 import { HistoryOutlined, MessageOutlined, PlusOutlined, SearchOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
@@ -22,6 +22,16 @@ const normalizeListResult = (res) => {
   if (res && res.groupId) return { list: [res], total: 1 };
   return { list: [], total: 0 };
 };
+
+const normalizeGroupList = (res) => {
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.list)) return res.list;
+  if (Array.isArray(res?.data?.list)) return res.data.list;
+  return [];
+};
+
+const extractGroupId = (group) =>
+  group?.groupId ?? group?.groupID ?? group?.group_id ?? group?.id ?? group?.groupIdStr;
 
 const resolveJoinError = (raw) => {
   const msg = String(raw || '申请发送失败');
@@ -51,6 +61,7 @@ const UserSearch = () => {
   const [joinLoading, setJoinLoading] = useState(false);
   const [currentGroup, setCurrentGroup] = useState(null);
   const [appliedGroups, setAppliedGroups] = useState({});
+  const [joinedGroupIds, setJoinedGroupIds] = useState(new Set());
 
   // Sent join requests drawer
   const [requestsOpen, setRequestsOpen] = useState(false);
@@ -157,6 +168,23 @@ const UserSearch = () => {
     }
   };
 
+  const loadJoinedGroupIds = async () => {
+    try {
+      const res = await groupApi.getList(1, 200);
+      const list = normalizeGroupList(res);
+      const ids = new Set();
+      list.forEach((item) => {
+        const id = extractGroupId(item);
+        if (id != null) ids.add(String(id));
+      });
+      setJoinedGroupIds(ids);
+      return ids;
+    } catch (e) {
+      console.error('Load joined groups failed', e);
+      return null;
+    }
+  };
+
   const loadJoinRequests = async (page = 1) => {
     setRequestsLoading(true);
     setRequestsPage(page);
@@ -174,6 +202,8 @@ const UserSearch = () => {
         }
       });
       setAppliedGroups(newAppliedMap);
+
+      await loadJoinedGroupIds();
 
       const groupIds = Array.from(new Set(list.map((item) => String(item.groupId)).filter(Boolean)));
       const missing = groupIds.filter((id) => !groupInfoMap[id]);
@@ -245,9 +275,10 @@ const UserSearch = () => {
       }}
       renderItem={(item) => {
         const status = appliedGroups[String(item.groupId)];
-        const isPending = status === 0;
-        const isApproved = status === 1;
-        const isRejected = status === 2;
+        const isJoined = joinedGroupIds.has(String(item.groupId));
+        const isPending = status === 0 && !isJoined;
+        const isApproved = status === 1 && isJoined;
+        const isRejected = status === 2 && !isJoined;
         const isDismissed = item.status === 2;
         const isFull =
           Number.isFinite(item?.memberCount) &&
@@ -263,7 +294,7 @@ const UserSearch = () => {
         if (isRejected) statusTags.push(<Tag key="rejected" color="red">已拒绝</Tag>);
 
         let actionNode = null;
-        if (isApproved) {
+        if (isJoined) {
           actionNode = (
             <Button
               type="primary"
@@ -355,7 +386,7 @@ const UserSearch = () => {
           ? await groupApi.searchGroupPrecise(kw)
           : await groupApi.searchGroup(kw);
         const { list } = normalizeListResult(res);
-        setGroups(list);
+        setGroups(list.filter((g) => g.status !== 2));
         setUsers([]);
         setTotal(0);
         return;
@@ -499,3 +530,4 @@ const UserSearch = () => {
 };
 
 export default UserSearch;
+

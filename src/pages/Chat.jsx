@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+﻿import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Layout, List, Avatar, Input, InputNumber, Typography, Button, Space, Badge, Empty, Spin, theme, Tabs, Modal, Form, message, Tooltip, Dropdown, Drawer, Descriptions, Tag, Image, Upload } from 'antd';
 import { SendOutlined, UserOutlined, PictureOutlined, TeamOutlined, PlusOutlined, MessageOutlined, MoreOutlined, SearchOutlined, BellOutlined, UserAddOutlined, DeleteOutlined, ExclamationCircleOutlined, FileOutlined, PaperClipOutlined, CloudDownloadOutlined, CloseOutlined, UploadOutlined, EditOutlined, LogoutOutlined, StopOutlined } from '@ant-design/icons';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -724,6 +724,7 @@ const Chat = () => {
     if (type === 'message') return 'chat';
     if (type === 'group_message') return 'group_chat';
     if (type === 'group_join' || type === 'group_leave' || type === 'group_dismiss') return 'group_event';
+    if (type === 'dismissGroup' || type === 'kickMember' || type === 'quitGroup' || type === 'joinGroup') return 'group_event';
     return type;
   };
 
@@ -746,10 +747,6 @@ const Chat = () => {
         handleOfflineMessages(msg);
       } else if (normalizedType === 'read') {
         handleReadReceipt(msg);
-      } else if (normalizedType === 'friend_request') {
-        message.info(`收到好友请求: ${msg.data?.message || ''}`);
-      } else if (normalizedType === 'group_invitation') {
-        message.info(`收到入群邀请: ${msg.data?.message || ''}`);
       } else if (normalizedType === 'ack') {
         handleAck(msg);
       } else if (normalizedType === 'error') {
@@ -910,6 +907,9 @@ const Chat = () => {
       if (rawType === 'group_join') eventType = 'joinGroup';
       if (rawType === 'group_leave') eventType = 'quitGroup';
       if (rawType === 'group_dismiss') eventType = 'dismissGroup';
+      if (rawType === 'dismissGroup' || rawType === 'kickMember' || rawType === 'quitGroup' || rawType === 'joinGroup') {
+        eventType = rawType;
+      }
     }
 
     const groupId = eventData?.groupId;
@@ -938,36 +938,29 @@ const Chat = () => {
     let shouldRefreshSessions = false;
 
     if (eventType === 'dismissGroup') {
-      message.warning('Group was dismissed.');
       removeGroupSession();
       exitActiveGroup();
       shouldRefreshSessions = true;
     } else if (eventType === 'kickMember') {
       if (isSelf) {
-        message.warning('You were removed from the group.');
         removeGroupSession();
         exitActiveGroup();
         shouldRefreshSessions = true;
       } else {
-        message.info('A member was removed from the group.');
         removeMemberFromList();
       }
     } else if (eventType === 'quitGroup') {
       if (isSelf) {
-        message.info('You left the group.');
         removeGroupSession();
         exitActiveGroup();
         shouldRefreshSessions = true;
       } else {
-        message.info('A member left the group.');
         removeMemberFromList();
       }
     } else if (eventType === 'joinGroup') {
       if (isSelf) {
-        message.success('You joined a new group.');
         shouldRefreshSessions = true;
       } else {
-        message.info('A new member joined the group.');
       }
       if (isActiveGroup) fetchDetailInfo();
     }
@@ -2400,3 +2393,7 @@ const Chat = () => {
 };
 
 export default Chat;
+
+
+
+

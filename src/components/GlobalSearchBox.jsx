@@ -71,30 +71,33 @@ const GlobalSearchBox = ({
         });
       }
       if (data?.groups?.length) {
-        next.push({
-          label: <Text type="secondary">群组</Text>,
-          options: data.groups.map((g) => ({
-            value: `group_${g.groupId}`,
-            label: (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Avatar shape="square" src={g.avatar} size="small" icon={<TeamOutlined />} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <Text strong>{renderHighlight(g.name, keyword)}</Text>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    ID: {renderHighlight(g.groupId, keyword)}
-                  </Text>
-                  {g.description ? (
+        const validGroups = data.groups.filter((g) => g.status !== 2);
+        if (validGroups.length) {
+          next.push({
+            label: <Text type="secondary">群组</Text>,
+            options: validGroups.map((g) => ({
+              value: `group_${g.groupId}`,
+              label: (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Avatar shape="square" src={g.avatar} size="small" icon={<TeamOutlined />} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Text strong>{renderHighlight(g.name, keyword)}</Text>
                     <Text type="secondary" style={{ fontSize: 11 }}>
-                      {renderHighlight(g.description, keyword)}
+                      ID: {renderHighlight(g.groupId, keyword)}
                     </Text>
-                  ) : null}
+                    {g.description ? (
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {renderHighlight(g.description, keyword)}
+                      </Text>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ),
-            data: g,
-            type: 'group',
-          })),
-        });
+              ),
+              data: g,
+              type: 'group',
+            })),
+          });
+        }
       }
       return next;
     },

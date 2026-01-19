@@ -1,23 +1,38 @@
-import React, { useEffect, useState } from 'react';
-import { Badge, Empty, List, Space, Tabs, Typography, message, Radio } from 'antd';
+﻿import React, { useEffect, useState } from 'react';
+import { Badge, Empty, List, Space, Tabs, Typography, message, Radio, Avatar } from 'antd';
+import { TeamOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import FriendRequestCard from '../components/friend/FriendRequestCard';
 import GroupInvitationCard from '../components/friend/GroupInvitationCard';
 import GroupJoinRequestCard from '../components/group/GroupJoinRequestCard';
+import GroupEventCard from '../components/group/GroupEventCard';
 import { friendApi } from '../api/friend';
 import { groupApi } from '../api/group';
 import { updateNotificationCounts } from '../utils/notificationStore';
 import { loadReadStatus, markAsRead } from '../utils/notificationReadStore';
+import { loadGroupEvents, onGroupEventsUpdated, markGroupEventsRead, getUnreadGroupEventCount } from '../utils/groupEventStore';
 import useUserCache from '../hooks/useUserCache';
 
 const { Title, Text } = Typography;
+
+const formatEventTime = (timestamp) => {
+  if (!timestamp || Number.isNaN(Number(timestamp))) return '-';
+  const date = new Date(Number(timestamp) * 1000);
+  if (Number.isNaN(date.getTime())) return '-';
+
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  return isToday
+    ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
 
 const FriendRequests = () => {
   const navigate = useNavigate();
   const { getUser, ensureUsers } = useUserCache();
 
-  // mainTab: 'friend' | 'group' | 'join_request'
+  // mainTab: 'friend' | 'group' | 'join' | 'group_event'
   const [mainTab, setMainTab] = useState('friend');
   // subTab: 'received' | 'sent'
   const [subTab, setSubTab] = useState('received');
@@ -36,8 +51,10 @@ const FriendRequests = () => {
     groupReceived: 0,
     groupSent: 0,
     joinReceived: 0,
-    joinSent: 0
+    joinSent: 0,
+    groupEvent: 0
   });
+  const [groupEvents, setGroupEvents] = useState([]);
 
   const getPendingItems = (res) => {
     if (!res) return [];
@@ -151,6 +168,7 @@ const FriendRequests = () => {
         checkActiveGroups(joinSentProcessed)
       ]);
 
+      const groupEventCount = getUnreadGroupEventCount();
       const next = {
         friendReceived: friendReceivedPending.length,
         friendSent: friendSentProcessed.length,
@@ -158,6 +176,7 @@ const FriendRequests = () => {
         groupSent: groupSentCount,
         joinReceived: joinReceivedCount,
         joinSent: joinSentCount,
+        groupEvent: groupEventCount,
       };
       setBadgeCounts(next);
 
@@ -165,7 +184,7 @@ const FriendRequests = () => {
       const totalFriend = next.friendReceived + next.friendSent;
       const totalGroup = next.groupReceived + next.groupSent;
       const totalJoin = next.joinReceived + next.joinSent;
-      updateNotificationCounts({ friend: totalFriend, group: totalGroup, joinReceived: totalJoin });
+      updateNotificationCounts({ friend: totalFriend, group: totalGroup, joinReceived: totalJoin, groupEvent: groupEventCount });
     } catch (e) {
       console.error('Refresh badges failed', e);
     }
@@ -196,6 +215,43 @@ const FriendRequests = () => {
       });
     } catch (e) {
       console.error('Failed to fetch group details', e);
+    }
+  };
+
+  const loadGroupEventsState = async (markRead = false) => {
+    try {
+      const events = loadGroupEvents();
+      let nextEvents = events;
+
+      if (markRead && events.some((event) => !event.read)) {
+        markGroupEventsRead();
+        nextEvents = events.map((event) => ({ ...event, read: true }));
+      }
+
+      setGroupEvents(nextEvents);
+
+      const unreadCount = nextEvents.filter((event) => !event?.read).length;
+      setBadgeCounts((prev) => ({ ...prev, groupEvent: unreadCount }));
+      updateNotificationCounts({ groupEvent: unreadCount });
+
+      const userIds = new Set();
+      const groupIds = new Set();
+      nextEvents.forEach((event) => {
+        const data = event?.eventData || {};
+        const groupId = event?.groupId || data.groupId;
+        if (groupId) groupIds.add(String(groupId));
+        const memberId = data.memberId ?? data.userId;
+        const operatorId = data.operatorId;
+        if (memberId != null) userIds.add(memberId);
+        if (operatorId != null) userIds.add(operatorId);
+      });
+
+      if (userIds.size) await ensureUsers(Array.from(userIds));
+      if (groupIds.size) {
+        await fetchGroupDetails(Array.from(groupIds).map((id) => ({ groupId: id })));
+      }
+    } catch (e) {
+      console.error('Load group events failed', e);
     }
   };
 
@@ -290,6 +346,16 @@ const FriendRequests = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mainTab, subTab, page]);
 
+  useEffect(() => {
+    void loadGroupEventsState(mainTab === 'group_event');
+  }, [mainTab]);
+
+  useEffect(() => {
+    const unsub = onGroupEventsUpdated(() => {
+      void loadGroupEventsState(mainTab === 'group_event');
+    });
+    return unsub;
+  }, [mainTab]);
   const action = async (item, act) => {
     setWorkingRequestId(item.id);
     try {
@@ -324,6 +390,30 @@ const FriendRequests = () => {
   const handleEnterGroup = (groupId) => {
     if (!groupId) return;
     navigate(`/chat?type=group&id=${groupId}`);
+  };
+
+  const renderGroupEventItem = (event) => {
+    const data = event?.eventData || {};
+    const groupId = event?.groupId || data.groupId;
+    const memberId = data.memberId ?? data.userId;
+    const operatorId = data.operatorId;
+    
+    const userMap = {};
+    if (memberId) userMap[memberId] = getUser(memberId);
+    if (operatorId) userMap[operatorId] = getUser(operatorId);
+
+    return (
+      <List.Item style={{ padding: 0, border: 'none' }}>
+        <div style={{ width: '100%' }}>
+          <GroupEventCard 
+            event={event}
+            groupInfo={groupCache[String(groupId)]}
+            userMap={userMap}
+            onClickGroup={handleEnterGroup}
+          />
+        </div>
+      </List.Item>
+    );
   };
 
   const renderItem = (item) => {
@@ -388,7 +478,7 @@ const FriendRequests = () => {
           <Title level={2} style={{ margin: '0 0 8px 0', fontSize: 28 }}>
             通知中心
           </Title>
-          <Text type="secondary" style={{ fontSize: 16 }}>好友申请 · 群组邀请 · 入群申请</Text>
+          <Text type="secondary" style={{ fontSize: 16 }}>好友申请 · 群组邀请 · 入群申请 · 群组变更</Text>
         </div>
 
         <div style={{
@@ -436,6 +526,16 @@ const FriendRequests = () => {
                     </Space>
                   )
                 },
+                {
+                  key: 'group_event',
+                  label: (
+                    <Space size={6}>
+                      <span>群组变更</span>
+                      {badgeCounts.groupEvent > 0 ?
+                        <Badge count={badgeCounts.groupEvent} size="small" /> : null}
+                    </Space>
+                  )
+                },
               ]}
               size="large"
               centered
@@ -443,8 +543,8 @@ const FriendRequests = () => {
               tabBarStyle={{ borderBottom: '1px solid #f1f5f9' }}
             />
 
-            {/* Only three tabs now: friend, group, join */}
-            <Radio.Group
+            {mainTab !== 'group_event' && (
+              <Radio.Group
               value={subTab}
               onChange={e => {
                 setSubTab(e.target.value);
@@ -488,30 +588,46 @@ const FriendRequests = () => {
                   '发出的'
                 )}
               </Radio.Button>
-            </Radio.Group>
+                </Radio.Group>
+            )}
           </div>
 
           <List
             loading={loading}
-            dataSource={list}
+            dataSource={mainTab === 'group_event' ? groupEvents : list}
             rowKey="id"
-            locale={{ emptyText: <Empty description="暂无通知" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
-            split={false}
-            pagination={{
-              current: page,
-              pageSize,
-              total,
-              hideOnSinglePage: true,
-              onChange: (p) => setPage(p),
-              style: { textAlign: 'center', marginTop: 24 },
+            locale={{
+              emptyText: (
+                <Empty
+                  description={mainTab === 'group_event' ? '暂无群组变更通知' : '暂无通知'}
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )
             }}
-            renderItem={(item) => (
-              <List.Item style={{ padding: 0 }}>
-                <div style={{ width: '100%' }}>
-                  {renderItem(item)}
-                </div>
-              </List.Item>
-            )}
+            split={false}
+            pagination={
+              mainTab === 'group_event'
+                ? false
+                : {
+                    current: page,
+                    pageSize,
+                    total,
+                    hideOnSinglePage: true,
+                    onChange: (p) => setPage(p),
+                    style: { textAlign: 'center', marginTop: 24 },
+                  }
+            }
+            renderItem={(item) =>
+              mainTab === 'group_event' ? (
+                renderGroupEventItem(item)
+              ) : (
+                <List.Item style={{ padding: 0 }}>
+                  <div style={{ width: '100%' }}>
+                    {renderItem(item)}
+                  </div>
+                </List.Item>
+              )
+            }
           />
         </div>
         <div style={{ height: 40 }} />
@@ -521,3 +637,13 @@ const FriendRequests = () => {
 };
 
 export default FriendRequests;
+
+
+
+
+
+
+
+
+
+

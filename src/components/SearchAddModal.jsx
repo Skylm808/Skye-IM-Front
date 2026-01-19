@@ -102,7 +102,7 @@ const SearchAddModal = ({ open, onCancel, initialTab = 'user' }) => {
         const res = isGroupId(trimmed)
           ? await groupApi.searchGroupPrecise(trimmed)
           : await groupApi.searchGroup(trimmed);
-        setGroups(normalizeGroupList(res));
+        setGroups(normalizeGroupList(res).filter((g) => g.status !== 2));
       }
     } catch (e) {
       console.error(e);
