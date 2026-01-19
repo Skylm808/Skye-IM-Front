@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Layout, Menu, Avatar, Dropdown, Space, Typography, Spin, Result, Button, Tooltip, Badge } from 'antd';
+﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Layout, Menu, Avatar, Dropdown, Space, Typography, Spin, Result, Button, Tooltip, Badge, message } from 'antd';
 import {
   LogoutOutlined,
   MessageOutlined,
@@ -20,6 +20,7 @@ import { groupApi } from '../api/group';
 import { wsClient } from '../utils/websocket';
 import { getFriendSessionKey, getGroupSessionKey, updateSessionMeta, replaceSessionsMeta, onSessionsUpdated, loadSessionsMeta } from '../utils/sessionStore';
 import { loadNotificationCounts, onNotificationsUpdated, updateNotificationCounts } from '../utils/notificationStore';
+import { addGroupEvent, getUnreadGroupEventCount } from '../utils/groupEventStore';
 import { loadReadStatus } from '../utils/notificationReadStore';
 
 const { Header, Content, Sider } = Layout;
@@ -37,6 +38,27 @@ const pickSelectedKey = (pathname) => {
 
 const normalizeUser = (data) => (data && data.user ? data.user : data);
 
+const normalizeGroupList = (res) => {
+  if (Array.isArray(res)) return res;
+  if (Array.isArray(res?.list)) return res.list;
+  if (Array.isArray(res?.data?.list)) return res.data.list;
+  return [];
+};
+
+const extractGroupId = (group) =>
+  group?.groupId ?? group?.groupID ?? group?.group_id ?? group?.id ?? group?.groupIdStr;
+
+const resolveGroupRole = (info, currentUserId) => {
+  const rawRole = info?.role ?? info?.myRole ?? info?.memberRole ?? info?.userRole;
+  const role = Number(rawRole);
+  if (Number.isFinite(role)) return role;
+  if (info?.isOwner) return 1;
+  if (info?.isAdmin) return 2;
+  const ownerId = info?.ownerId ?? info?.owner_id ?? info?.owner;
+  if (ownerId != null && currentUserId != null && String(ownerId) === String(currentUserId)) return 1;
+  return null;
+};
+
 const MainLayout = ({ pageTitle, children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -51,8 +73,13 @@ const MainLayout = ({ pageTitle, children }) => {
   const [unreadTotal, setUnreadTotal] = useState(0);
   const [notificationCount, setNotificationCount] = useState(() => {
     const counts = loadNotificationCounts();
-    return (counts.friend || 0) + (counts.group || 0) + (counts.joinReceived || 0);
+    return (counts.friend || 0) + (counts.group || 0) + (counts.joinReceived || 0) + (counts.groupEvent || 0);
   });
+
+  const userRef = useRef(null);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
 
   const pendingDisconnectRef = useRef(null);
   const startupTimeRef = useRef(Date.now() / 1000);
@@ -67,6 +94,7 @@ const MainLayout = ({ pageTitle, children }) => {
   const groupSyncInFlightRef = useRef(false);
   const groupSyncTimerRef = useRef(null);
   const offlineSyncRequestedRef = useRef({ private: false, group: false });
+  const groupRoleCacheRef = useRef(new Map());
 
   const location = useLocation();
   const navigate = useNavigate();
@@ -79,6 +107,127 @@ const MainLayout = ({ pageTitle, children }) => {
     localStorage.setItem('skyeim_sider_collapsed', String(next));
   };
 
+  const getNotificationTotal = (counts) =>
+    (counts.friend || 0) + (counts.group || 0) + (counts.joinReceived || 0) + (counts.groupEvent || 0);
+
+  const updateNotificationTotal = (updater) => {
+    const current = loadNotificationCounts();
+    const next =
+      typeof updater === 'function'
+        ? updater(current)
+        : { ...current, ...(updater || {}) };
+    updateNotificationCounts(next);
+    setNotificationCount(getNotificationTotal(next));
+    return next;
+  };
+
+  const cacheGroupRole = (groupId, role) => {
+    if (groupId == null || role == null) return;
+    groupRoleCacheRef.current.set(String(groupId), role);
+  };
+
+  const getCachedGroupRole = (groupId) => {
+    if (groupId == null) return null;
+    return groupRoleCacheRef.current.get(String(groupId));
+  };
+
+  const fetchGroupRole = async (groupId) => {
+    if (!groupId) return null;
+    const cached = getCachedGroupRole(groupId);
+    if (cached != null) return cached;
+    try {
+      const res = await groupApi.getDetails(groupId);
+      const info = res?.group || res?.data || res;
+      const role = resolveGroupRole(info, user?.id);
+      if (role != null) cacheGroupRole(groupId, role);
+      return role;
+    } catch (e) {
+      console.warn('Fetch group role failed', groupId, e);
+      return null;
+    }
+  };
+
+  const isGroupManager = async (groupId) => {
+    const role = await fetchGroupRole(groupId);
+    return role === 1 || role === 2;
+  };
+
+  const normalizeGroupEvent = (msg) => {
+    const rawType = msg?.type;
+    let eventType = msg?.eventType || msg?.data?.eventType;
+    let eventData = msg?.eventData || msg?.data?.eventData || msg?.data || {};
+    if (!eventType) {
+      if (rawType === 'group_join') eventType = 'joinGroup';
+      if (rawType === 'group_leave') eventType = 'quitGroup';
+      if (rawType === 'group_dismiss') eventType = 'dismissGroup';
+      if (
+        rawType === 'dismissGroup' ||
+        rawType === 'kickMember' ||
+        rawType === 'quitGroup' ||
+        rawType === 'joinGroup'
+      ) {
+        eventType = rawType;
+      }
+    }
+    if (!eventData || typeof eventData !== 'object') eventData = {};
+    return { eventType, eventData };
+  };
+
+  const handleGroupEventNotification = async (msg) => {
+    const { eventType, eventData } = normalizeGroupEvent(msg);
+    if (!eventType) return;
+
+    const groupId = eventData?.groupId || msg?.data?.groupId || msg?.groupId;
+    const memberId = eventData?.memberId ?? eventData?.userId;
+    const currentUser = userRef.current;
+    const isSelf = memberId != null && currentUser?.id != null && String(memberId) === String(currentUser.id);
+
+    if (eventType !== 'dismissGroup') {
+      const manager = await isGroupManager(groupId);
+      if (!manager && !isSelf) return;
+    }
+
+    let groupName = groupId;
+    let groupAvatar = null;
+    try {
+      if (groupId) {
+        const res = await groupApi.getDetails(groupId);
+        const info = res?.group || res?.data || res;
+        if (info?.name) groupName = info.name;
+        if (info?.avatar) groupAvatar = info.avatar;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch group details for notification', e);
+    }
+
+    const groupLabel = groupName && groupName !== groupId ? groupName : (groupId ? `群聊 ${groupId}` : '群聊');
+
+    if (eventType === 'dismissGroup') {
+      message.warning(`${groupLabel} 已解散`);
+      if (groupId) groupRoleCacheRef.current.delete(String(groupId));
+    } else if (eventType === 'kickMember') {
+      message.warning(isSelf ? `你已被移出 ${groupLabel}` : `${groupLabel} 有成员被移出`);
+      if (isSelf && groupId) groupRoleCacheRef.current.delete(String(groupId));
+    } else if (eventType === 'quitGroup') {
+      message.info(isSelf ? `你已退出 ${groupLabel}` : `${groupLabel} 有成员退出`);
+      if (isSelf && groupId) groupRoleCacheRef.current.delete(String(groupId));
+    } else if (eventType === 'joinGroup') {
+      message.info(isSelf ? `你已加入 ${groupLabel}` : `${groupLabel} 有新成员加入`);
+      if (isSelf && groupId) await fetchGroupRole(groupId);
+    }
+
+    addGroupEvent({
+      eventType,
+      eventData: {
+        ...eventData,
+        groupName,
+        groupAvatar
+      },
+      groupId
+    });
+    const unread = getUnreadGroupEventCount();
+    updateNotificationTotal((current) => ({ ...current, groupEvent: unread }));
+  };
   // Fetch initial data
   useEffect(() => {
     const token = localStorage.getItem('accessToken');
@@ -88,12 +237,21 @@ const MainLayout = ({ pageTitle, children }) => {
     }
     (async () => {
       try {
-        const [profile, conversations] = await Promise.all([
+        const [profile, conversations, groupsRes] = await Promise.all([
           getProfile(),
-          messageApi.getConversations().catch(() => ({ list: [] }))
+          messageApi.getConversations().catch(() => ({ list: [] })),
+          groupApi.getList(1, 200).catch(() => ({ list: [] }))
         ]);
 
-        setUser(normalizeUser(profile));
+        const normalizedProfile = normalizeUser(profile);
+        setUser(normalizedProfile);
+
+        const groupList = normalizeGroupList(groupsRes);
+        groupList.forEach((item) => {
+          const groupId = extractGroupId(item);
+          const role = resolveGroupRole(item, normalizedProfile?.id);
+          if (groupId && role != null) cacheGroupRole(groupId, role);
+        });
 
         // Initialize sessions
         const list = conversations.list || conversations || [];
@@ -272,8 +430,7 @@ const MainLayout = ({ pageTitle, children }) => {
         const gCount = gReceivedCount + gSentCount;
         const jCount = jReceivedCount + jSentCount;
 
-        updateNotificationCounts({ friend: fCount, group: gCount, joinReceived: jCount });
-        setNotificationCount(fCount + gCount + jCount);
+        updateNotificationTotal({ friend: fCount, group: gCount, joinReceived: jCount });
 
         wsClient.connect();
       } catch (e) {
@@ -298,7 +455,7 @@ const MainLayout = ({ pageTitle, children }) => {
 
   useEffect(() => {
     const unsub = onNotificationsUpdated((counts) => {
-      setNotificationCount((counts.friend || 0) + (counts.group || 0));
+      setNotificationCount(getNotificationTotal(counts));
     });
     return unsub;
   }, []);
@@ -524,15 +681,76 @@ const MainLayout = ({ pageTitle, children }) => {
       }
 
       // Update notifications on events
-      if (msg.type === 'friend_request' || msg.type === 'group_invitation' || msg.type === 'group_join_request') {
-        const current = loadNotificationCounts();
-        const next = {
-          friend: msg.type === 'friend_request' ? (current.friend || 0) + 1 : (current.friend || 0),
-          group: msg.type === 'group_invitation' ? (current.group || 0) + 1 : (current.group || 0),
-          joinReceived: msg.type === 'group_join_request' ? (current.joinReceived || 0) + 1 : (current.joinReceived || 0),
-        };
-        updateNotificationCounts(next);
-        setNotificationCount(next.friend + next.group + next.joinReceived);
+      if (msg.type === 'friend_request') {
+        message.info(`收到好友请求: ${msg.data?.message || ''}`);
+        updateNotificationTotal((current) => ({
+          ...current,
+          friend: (current.friend || 0) + 1,
+        }));
+        return;
+      }
+
+      if (msg.type === 'friend_request_handled') {
+        const action = msg.data?.action;
+        const actionText =
+          action === 'accepted'
+            ? '已接受'
+            : action === 'rejected'
+              ? '已拒绝'
+              : '已处理';
+        message.info(`好友请求${actionText}`);
+        updateNotificationTotal((current) => ({
+          ...current,
+          friend: (current.friend || 0) + 1,
+        }));
+        return;
+      }
+
+      if (msg.type === 'group_invitation') {
+        message.info(`收到群组邀请: ${msg.data?.message || ''}`);
+        updateNotificationTotal((current) => ({
+          ...current,
+          group: (current.group || 0) + 1,
+        }));
+        return;
+      }
+
+      if (msg.type === 'group_invitation_handled') {
+        const action = msg.data?.action;
+        const actionText =
+          action === 'accepted'
+            ? '已接受'
+            : action === 'rejected'
+              ? '已拒绝'
+              : '已处理';
+        message.info(`群组邀请${actionText}`);
+        updateNotificationTotal((current) => ({
+          ...current,
+          group: (current.group || 0) + 1,
+        }));
+        return;
+      }
+
+      if (msg.type === 'group_join_request') {
+        message.info('收到新的入群申请');
+        updateNotificationTotal((current) => ({
+          ...current,
+          joinReceived: (current.joinReceived || 0) + 1,
+        }));
+        return;
+      }
+
+      if (
+        msg.type === 'group_event' ||
+        msg.type === 'group_join' ||
+        msg.type === 'group_leave' ||
+        msg.type === 'group_dismiss' ||
+        msg.type === 'dismissGroup' ||
+        msg.type === 'kickMember' ||
+        msg.type === 'quitGroup' ||
+        msg.type === 'joinGroup'
+      ) {
+        void handleGroupEventNotification(msg);
         return;
       }
 
@@ -807,3 +1025,7 @@ const MainLayout = ({ pageTitle, children }) => {
 };
 
 export default MainLayout;
+
+
+
+
