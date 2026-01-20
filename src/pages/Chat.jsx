@@ -775,7 +775,11 @@ const Chat = () => {
 
     if (activeChat?.type === 'friend' && String(activeChat.id) === String(peerId)) {
       upsertMessage(data, 'friend');
-      messageApi.markRead(activeChat.id).catch(() => {});
+      wsClient.send({ 
+        type: 'read', 
+        data: { peerId: Number(activeChat.id) } 
+      });
+      updateSessionMeta(getFriendSessionKey(activeChat.id), { unread: 0 });
       shouldScrollToBottomRef.current = true;
     }
   };
@@ -851,7 +855,13 @@ const Chat = () => {
     }
 
     if (userIds.size) ensureUsers(Array.from(userIds));
-    if (hasActiveFriend) messageApi.markRead(activeId).catch(() => {});
+    if (hasActiveFriend) {
+      wsClient.send({ 
+        type: 'read', 
+        data: { peerId: Number(activeId) } 
+      });
+      updateSessionMeta(getFriendSessionKey(activeId), { unread: 0 });
+    }
   };
 
   const handleAck = (msg) => {
@@ -887,15 +897,33 @@ const Chat = () => {
 
   const handleReadReceipt = (msg) => {
     const data = msg?.data || {};
-    const msgIds = Array.isArray(data.msgIds) ? data.msgIds : [];
-    if (!msgIds.length) return;
-    const idSet = new Set(msgIds.map((id) => String(id)));
+    const userId = data.userId; // Who read the messages
+    const timestamp = data.timestamp;
 
-    setMessages(prev => prev.map(m => {
-      const id = m.msgId || m.id;
-      if (!id || !idSet.has(String(id))) return m;
-      return { ...m, localStatus: 'read', readBy: data.readBy, readAt: data.readAt };
-    }));
+    if (!userId || !timestamp) return;
+
+    // Only update if the read receipt is from the current active chat user
+    if (activeChat?.type === 'friend' && String(activeChat.id) === String(userId)) {
+      setMessages(prev => prev.map(m => {
+         // Check if message is mine, status is not yet 'read', and created before timestamp
+         const isMe = String(m.fromUserId) === String(currentUser?.id);
+         if (!isMe) return m;
+         
+         if (m.localStatus === 'read') return m; // Already read
+         if (m.localStatus !== 'sent' && m.localStatus !== 'delivered') return m; // Not ready to be read
+
+         // Compare timestamp (m.createdAt is seconds, data.timestamp is likely seconds or ms, check spec)
+         // Spec example: 1705743457 (seconds likely, as typical Unix timestamp).
+         // Local message createdAt is Date.now() / 1000 (seconds, float).
+         // Input timestamp is integer seconds.
+         // We must floor the local timestamp to match integer seconds comparison.
+         
+         if (Math.floor(m.createdAt) <= timestamp) {
+            return { ...m, localStatus: 'read', readAt: timestamp };
+         }
+         return m;
+      }));
+    }
   };
 
   const handleGroupEvent = (msg) => {
@@ -992,7 +1020,11 @@ const Chat = () => {
         let res;
         if (activeChat.type === 'friend') {
            res = await messageApi.getHistory(activeChat.id, 50);
-           await messageApi.markRead(activeChat.id);
+           // Send WebSocket read receipt
+           wsClient.send({ 
+             type: 'read', 
+             data: { peerId: Number(activeChat.id) } 
+           });
         } else {
            res = await messageApi.getGroupHistory(activeChat.id, 50);
            groupApi.getMembers(activeChat.id, 1, 200).then((membersRes) => {
@@ -1952,7 +1984,7 @@ const Chat = () => {
                       const isMe = String(msg.fromUserId) === String(currentUser?.id);
                       const sender = activeChat.type === 'group' && !isMe ? getUser(msg.fromUserId) : null;
                       const statusText = isMe
-                        ? (msg.localStatus === 'delivered' ? '对方已收' : msg.localStatus === 'sent' ? '已发送' : msg.localStatus === 'sending' ? '发送中' : msg.localStatus === 'failed' ? '发送失败' : '')
+                        ? (msg.localStatus === 'read' ? '对方已读' : msg.localStatus === 'delivered' ? '对方已收' : msg.localStatus === 'sent' ? '已发送' : msg.localStatus === 'sending' ? '发送中' : msg.localStatus === 'failed' ? '发送失败' : '')
                         : '';
                       const hasAt = Array.isArray(msg.atUserIds) && msg.atUserIds.length > 0;
                       const isAtMeMsg = !!msg.isAtMe;

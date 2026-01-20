@@ -809,7 +809,7 @@ const MainLayout = ({ pageTitle, children }) => {
         groupSyncTimerRef.current = null;
       }
     };
-  }, [location.pathname, user?.id]);
+  }, [location.pathname, location.search, user?.id]);
 
   const handleLogout = async () => {
     try {
