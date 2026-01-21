@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover, Badge, Collapse } from 'antd';
+import { Layout, List, Avatar, Typography, Button, Space, Tabs, Empty, Card, Tag, Modal, Form, Input, InputNumber, Row, Col, message, Dropdown, Descriptions, Popover, Badge, Collapse, Upload } from 'antd';
 import {
   UserOutlined,
   TeamOutlined,
@@ -19,7 +19,8 @@ import {
   CheckCircleOutlined,
   StopOutlined,
   CalendarOutlined,
-  EditOutlined
+  EditOutlined,
+  UploadOutlined
 } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
@@ -28,9 +29,11 @@ import GlobalSearchBox from '../components/GlobalSearchBox';
 import RemarkEditModal from '../components/friend/RemarkEditModal';
 import { friendApi } from '../api/friend';
 import { groupApi } from '../api/group';
+import { uploadApi } from '../api/upload';
 import { getUserInfo } from '../api/auth';
 import useUserCache from '../hooks/useUserCache';
 import GroupJoinRequestCard from '../components/group/GroupJoinRequestCard';
+import { onGroupCreated } from '../utils/groupCreatedStore';
 
 const { Sider, Content } = Layout;
 const { Text, Title } = Typography;
@@ -310,6 +313,9 @@ const Contacts = () => {
   const [workingFriendId, setWorkingFriendId] = useState(null);
 
   const [createGroupForm] = Form.useForm();
+  const [createGroupMemberIds, setCreateGroupMemberIds] = useState([]);
+  const [createGroupMemberSearch, setCreateGroupMemberSearch] = useState('');
+  const [createGroupAvatarUploading, setCreateGroupAvatarUploading] = useState(false);
 
   // Initial Fetch
   const fetchData = useCallback(async () => {
@@ -349,6 +355,25 @@ const Contacts = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const unsubscribe = onGroupCreated((payload) => {
+      const incoming = normalizeGroupItem(payload?.group);
+      if (!incoming?.groupId || incoming.status === 2) return;
+      setGroups((prev) => {
+        const exists = prev.some((group) => String(group.groupId) === String(incoming.groupId));
+        if (exists) {
+          return prev.map((group) =>
+            String(group.groupId) === String(incoming.groupId)
+              ? { ...group, ...incoming }
+              : group
+          );
+        }
+        return [incoming, ...prev];
+      });
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     if (location.state?.view) {
@@ -509,6 +534,28 @@ const Contacts = () => {
     return friends.filter(item => item?.friendId && !blacklistIdSet.has(String(item.friendId)));
   }, [friends, blacklistIdSet]);
 
+  const createGroupMemberSet = useMemo(
+    () => new Set(createGroupMemberIds.map((id) => String(id))),
+    [createGroupMemberIds]
+  );
+
+  const createGroupMemberCandidates = useMemo(() => {
+    const query = createGroupMemberSearch.trim().toLowerCase();
+    return baseFriends.filter((item) => {
+      const u = getUser(item.friendId);
+      const name = item.remark || u?.nickname || u?.username || '';
+      return !query || name.toLowerCase().includes(query);
+    });
+  }, [baseFriends, createGroupMemberSearch, getUser]);
+
+  const createGroupSelectedFriends = useMemo(() => {
+    if (!createGroupMemberIds.length) return [];
+    const friendMap = new Map(baseFriends.map((item) => [String(item.friendId), item]));
+    return createGroupMemberIds
+      .map((id) => friendMap.get(String(id)))
+      .filter(Boolean);
+  }, [baseFriends, createGroupMemberIds]);
+
   const filteredFriends = useMemo(() => {
     const query = searchText.toLowerCase();
     const list = baseFriends.filter(item => {
@@ -587,18 +634,42 @@ const Contacts = () => {
     [groups, isGroupManaged]
   );
 
+  const toggleCreateGroupMember = useCallback((friendId) => {
+    setCreateGroupMemberIds((prev) => {
+      const key = String(friendId);
+      const next = new Set(prev.map((value) => String(value)));
+      if (next.has(key)) {
+        return prev.filter((value) => String(value) !== key);
+      }
+      return [...prev, friendId];
+    });
+  }, []);
+
+  const removeCreateGroupMember = useCallback((friendId) => {
+    setCreateGroupMemberIds((prev) => prev.filter((value) => String(value) !== String(friendId)));
+  }, []);
+
   const handleCreateGroup = async (values) => {
     try {
+      const avatar = values.avatar || `https://api.dicebear.com/7.x/identicon/svg?seed=${values.name}`;
       const payload = {
         name: values.name,
         description: values.description,
-        avatar: 'https://api.dicebear.com/7.x/identicon/svg?seed=' + values.name
+        avatar
       };
       if (values.maxMembers) payload.maxMembers = Number(values.maxMembers);
+      if (createGroupMemberIds.length) {
+        const memberIds = createGroupMemberIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id));
+        if (memberIds.length) payload.memberIds = memberIds;
+      }
       await groupApi.create(payload);
       message.success('群组创建成功');
       setIsCreateGroupOpen(false);
       createGroupForm.resetFields();
+      setCreateGroupMemberIds([]);
+      setCreateGroupMemberSearch('');
       fetchData();
     } catch {
       message.error('创建失败');
@@ -1181,18 +1252,183 @@ const Contacts = () => {
       <Modal
         title="创建群组"
         open={isCreateGroupOpen}
-        onCancel={() => setIsCreateGroupOpen(false)}
+        onCancel={() => {
+          setIsCreateGroupOpen(false);
+          createGroupForm.resetFields();
+          setCreateGroupMemberIds([]);
+          setCreateGroupMemberSearch('');
+        }}
         onOk={() => createGroupForm.submit()}
       >
         <Form form={createGroupForm} onFinish={handleCreateGroup} layout="vertical">
           <Form.Item name="name" label="群名称" rules={[{ required: true, message: '请输入群名称' }]}>
             <Input placeholder="例如：技术交流群" />
           </Form.Item>
+          <Form.Item label="群头像">
+            <Space size={12}>
+              <Form.Item noStyle shouldUpdate={(prev, curr) => prev.avatar !== curr.avatar}>
+                {({ getFieldValue }) => (
+                  <Avatar
+                    size={64}
+                    shape="square"
+                    src={getFieldValue('avatar')}
+                    icon={<TeamOutlined />}
+                    style={{ borderRadius: 12, background: '#e2e8f0' }}
+                  />
+                )}
+              </Form.Item>
+              <Upload
+                accept="image/*"
+                showUploadList={false}
+                beforeUpload={async (file) => {
+                  setCreateGroupAvatarUploading(true);
+                  message.loading({ content: '头像上传中...', key: 'create_group_avatar' });
+                  try {
+                    const res = await uploadApi.uploadAvatar(file);
+                    const url = res?.url || res?.data?.url;
+                    if (url) {
+                      createGroupForm.setFieldsValue({ avatar: url });
+                      message.success({ content: '头像上传成功', key: 'create_group_avatar' });
+                    } else {
+                      message.error({ content: '头像上传失败', key: 'create_group_avatar' });
+                    }
+                  } catch (e) {
+                    message.error({ content: '头像上传失败', key: 'create_group_avatar' });
+                  } finally {
+                    setCreateGroupAvatarUploading(false);
+                  }
+                  return false;
+                }}
+              >
+                <Button icon={<UploadOutlined />} loading={createGroupAvatarUploading}>
+                  上传头像
+                </Button>
+              </Upload>
+            </Space>
+            <Form.Item name="avatar" hidden>
+              <Input />
+            </Form.Item>
+          </Form.Item>
           <Form.Item name="description" label="群描述">
             <Input.TextArea placeholder="介绍一下这个群..." />
           </Form.Item>
           <Form.Item name="maxMembers" label="最大人数">
             <InputNumber min={2} max={2000} placeholder="默认 200" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="添加初始成员（可选）">
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: '#f8fafc' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Space size={8}>
+                  <Text strong>已选择</Text>
+                  <Tag color="blue">{createGroupMemberIds.length} 人</Tag>
+                </Space>
+                <Button
+                  type="link"
+                  size="small"
+                  disabled={!createGroupMemberIds.length}
+                  onClick={() => setCreateGroupMemberIds([])}
+                >
+                  清空
+                </Button>
+              </div>
+              <Input
+                placeholder="搜索好友"
+                allowClear
+                value={createGroupMemberSearch}
+                onChange={(e) => setCreateGroupMemberSearch(e.target.value)}
+                style={{ marginTop: 8 }}
+              />
+              <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+                <Col xs={24} sm={12}>
+                  <Text type="secondary">好友列表</Text>
+                  <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+                    <List
+                      dataSource={createGroupMemberCandidates}
+                      locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配好友" /> }}
+                      renderItem={(item) => {
+                        const u = getUser(item.friendId);
+                        const name = item.remark || u?.nickname || u?.username || `${item.friendId || ''}`;
+                        const selected = createGroupMemberSet.has(String(item.friendId));
+                        return (
+                          <List.Item
+                            style={{ padding: '8px 4px', alignItems: 'center' }}
+                            actions={[
+                              <Button
+                                key="toggle"
+                                type={selected ? 'default' : 'primary'}
+                                size="small"
+                                onClick={() => toggleCreateGroupMember(item.friendId)}
+                              >
+                                {selected ? '移除' : '添加'}
+                              </Button>
+                            ]}
+                          >
+                            <List.Item.Meta
+                              avatar={<Avatar src={u?.avatar} icon={<UserOutlined />} />}
+                              title={(
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <Text ellipsis style={{ display: 'block' }}>{name}</Text>
+                                  </div>
+                                  {selected ? <Tag color="blue">已选</Tag> : null}
+                                </div>
+                              )}
+                              description={u?.username && item.remark ? `@${u.username}` : null}
+                              style={{ minWidth: 0 }}
+                            />
+                          </List.Item>
+                        );
+                      }}
+                    />
+                  </div>
+                </Col>
+                <Col xs={24} sm={12}>
+                  <Text type="secondary">已选择</Text>
+                  <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+                    {createGroupSelectedFriends.length ? (
+                      <List
+                        dataSource={createGroupSelectedFriends}
+                        renderItem={(item) => {
+                          const u = getUser(item.friendId);
+                          const name = item.remark || u?.nickname || u?.username || `${item.friendId || ''}`;
+                          return (
+                            <List.Item
+                              style={{ padding: '8px 4px', alignItems: 'center' }}
+                              actions={[
+                                <Button
+                                  key="remove"
+                                  type="link"
+                                  size="small"
+                                  onClick={() => removeCreateGroupMember(item.friendId)}
+                                >
+                                  移除
+                                </Button>
+                              ]}
+                            >
+                              <List.Item.Meta
+                                avatar={<Avatar src={u?.avatar} icon={<UserOutlined />} />}
+                                title={
+                                  <div style={{ minWidth: 0 }}>
+                                    <Text ellipsis style={{ display: 'block' }}>{name}</Text>
+                                  </div>
+                                }
+                                description={u?.username && item.remark ? `@${u.username}` : null}
+                                style={{ minWidth: 0 }}
+                              />
+                            </List.Item>
+                          );
+                        }}
+                      />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未选择成员" />
+                    )}
+                  </div>
+                </Col>
+              </Row>
+              <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>
+                群主会自动加入，初始成员可选。
+              </Text>
+            </div>
           </Form.Item>
         </Form>
       </Modal>

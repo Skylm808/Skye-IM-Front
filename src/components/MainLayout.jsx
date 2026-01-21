@@ -22,6 +22,8 @@ import { getFriendSessionKey, getGroupSessionKey, updateSessionMeta, replaceSess
 import { loadNotificationCounts, onNotificationsUpdated, updateNotificationCounts } from '../utils/notificationStore';
 import { addGroupEvent, getUnreadGroupEventCount } from '../utils/groupEventStore';
 import { loadReadStatus } from '../utils/notificationReadStore';
+import useUserCache from '../hooks/useUserCache';
+import { emitGroupCreated } from '../utils/groupCreatedStore';
 
 const { Header, Content, Sider } = Layout;
 const { Title, Text } = Typography;
@@ -45,6 +47,15 @@ const normalizeGroupList = (res) => {
   return [];
 };
 
+const normalizeGroupItem = (item) => {
+  if (!item || typeof item !== 'object') return null;
+  const groupId = item.groupId ?? item.groupID ?? item.group_id ?? item.id ?? item.groupIdStr;
+  const name = item.name ?? item.groupName ?? item.group_name;
+  const avatar = item.avatar ?? item.groupAvatar ?? item.group_avatar;
+  const ownerId = item.ownerId ?? item.owner_id ?? item.owner;
+  return { ...item, groupId, name, avatar, ownerId };
+};
+
 const extractGroupId = (group) =>
   group?.groupId ?? group?.groupID ?? group?.group_id ?? group?.id ?? group?.groupIdStr;
 
@@ -63,6 +74,7 @@ const MainLayout = ({ pageTitle, children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [wsStatus, setWsStatus] = useState(wsClient.isConnected ? 'connected' : 'disconnected');
+  const { getUser, ensureUsers } = useUserCache();
 
   // Persist collapsed state
   const [collapsed, setCollapsed] = useState(() => {
@@ -171,6 +183,54 @@ const MainLayout = ({ pageTitle, children }) => {
     }
     if (!eventData || typeof eventData !== 'object') eventData = {};
     return { eventType, eventData };
+  };
+
+  const parseCreateGroupPayload = (msg) => {
+    let data = msg?.data ?? msg;
+    if (data?.data && typeof data?.data === 'string' && !data?.group) {
+      try {
+        data = JSON.parse(data.data);
+      } catch {
+        return null;
+      }
+    }
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch {
+        return null;
+      }
+    }
+    return data && typeof data === 'object' ? data : null;
+  };
+
+  const handleCreateGroupNotification = async (msg) => {
+    const payload = parseCreateGroupPayload(msg);
+    const groupRaw = payload?.group || payload?.data?.group;
+    const operatorId = payload?.operatorId ?? payload?.data?.operatorId;
+    const normalizedGroup = normalizeGroupItem(groupRaw);
+    if (!normalizedGroup?.groupId) return;
+
+    emitGroupCreated({ group: normalizedGroup, operatorId });
+
+    const currentUser = userRef.current;
+    const isOperator =
+      operatorId != null && currentUser?.id != null && String(operatorId) === String(currentUser.id);
+    if (isOperator) {
+      cacheGroupRole(normalizedGroup.groupId, 1);
+      return;
+    }
+
+    let operatorName = null;
+    if (operatorId != null) {
+      await ensureUsers([operatorId]);
+      const op = getUser(operatorId);
+      operatorName = op?.nickname || op?.username || null;
+    }
+
+    const groupName = normalizedGroup.name || normalizedGroup.groupName || normalizedGroup.groupId;
+    const prefix = operatorName ? `你被 ${operatorName} 拉入群组` : '你被邀请加入群组';
+    message.info(`${prefix} "${groupName}"`);
   };
 
   const handleGroupEventNotification = async (msg) => {
@@ -737,6 +797,11 @@ const MainLayout = ({ pageTitle, children }) => {
           ...current,
           joinReceived: (current.joinReceived || 0) + 1,
         }));
+        return;
+      }
+
+      if (msg.type === 'createGroup') {
+        void handleCreateGroupNotification(msg);
         return;
       }
 
