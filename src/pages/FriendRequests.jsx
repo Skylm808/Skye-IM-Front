@@ -209,6 +209,15 @@ const FriendRequests = () => {
           const info = res?.group || res?.data || res;
           if (info && info.groupId) {
             next[String(info.groupId)] = info;
+          } else {
+            // Cache failed lookups to prevent retries (stale local storage data)
+            next[String(id)] = { 
+              groupId: id, 
+              name: '未知群组(已失效)', 
+              status: 2, 
+              avatar: null,
+              description: '该群组可能已被解散或数据已过期'
+            };
           }
         });
         return next;

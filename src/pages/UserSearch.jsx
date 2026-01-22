@@ -1,13 +1,15 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Avatar, Button, Card, Drawer, Empty, Input, List, Space, Table, Tag, Tabs, Typography, message } from 'antd';
-import { HistoryOutlined, MessageOutlined, PlusOutlined, SearchOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+import { Avatar, Button, Card, Drawer, Empty, Input, List, Space, Tag, Tabs, Typography, message } from 'antd';
+import { HistoryOutlined, MessageOutlined, PlusOutlined, SearchOutlined, TeamOutlined, UserOutlined, UserAddOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import MainLayout from '../components/MainLayout';
 import UserProfileModal from '../components/UserProfileModal';
 import JoinGroupModal from '../components/group/JoinGroupModal';
 import GroupJoinRequestCard from '../components/group/GroupJoinRequestCard';
+import AddFriendModal from '../components/friend/AddFriendModal';
 import { searchUser } from '../api/user';
 import { groupApi } from '../api/group';
+import { friendApi } from '../api/friend';
 
 const { Title, Text } = Typography;
 
@@ -63,6 +65,13 @@ const UserSearch = () => {
   const [appliedGroups, setAppliedGroups] = useState({});
   const [joinedGroupIds, setJoinedGroupIds] = useState(new Set());
 
+  // Add friend flow
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
+  const [friendTarget, setFriendTarget] = useState(null);
+  const [addFriendLoading, setAddFriendLoading] = useState(false);
+  const [sentFriendRequests, setSentFriendRequests] = useState(new Set());
+  const [friendIds, setFriendIds] = useState(new Set());
+
   // Sent join requests drawer
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [requestsLoading, setRequestsLoading] = useState(false);
@@ -79,53 +88,14 @@ const UserSearch = () => {
     import('../api/auth').then(({ getUserInfo }) => {
       getUserInfo().then(res => setCurrentUser(res.user || res)).catch(() => {});
     });
+    
+    // Load existing friends to update UI status
+    friendApi.getFriendList(1, 1000).then(res => {
+      const list = Array.isArray(res?.list) ? res.list : [];
+      const ids = new Set(list.map(f => f.friendId));
+      setFriendIds(ids);
+    }).catch(console.error);
   }, []);
-
-  const columns = useMemo(
-    () => [
-      {
-        title: '用户',
-        key: 'user',
-        render: (_, record) => (
-          <Space>
-            <Avatar src={record.avatar} icon={<UserOutlined />} />
-            <Space direction="vertical" size={0}>
-              <Text strong>{record.nickname || record.username}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                @{record.username}
-              </Text>
-            </Space>
-          </Space>
-        ),
-      },
-      { title: '邮箱', dataIndex: 'email', key: 'email', render: (v) => v || '-' },
-      { title: '手机', dataIndex: 'phone', key: 'phone', render: (v) => v || '-' },
-      {
-        title: '状态',
-        dataIndex: 'status',
-        key: 'status',
-        width: 90,
-        render: (v) => <Tag color={v === 1 ? 'green' : 'red'}>{v === 1 ? '正常' : '禁用'}</Tag>,
-      },
-      {
-        title: '操作',
-        key: 'action',
-        width: 110,
-        render: (_, record) => (
-          <Button
-            type="link"
-            onClick={() => {
-              setSelectedUserId(record.id);
-              setProfileOpen(true);
-            }}
-          >
-            查看
-          </Button>
-        ),
-      },
-    ],
-    []
-  );
 
   const isGroupId = useMemo(() => {
     return (value) => String(value || '').trim().startsWith('g_');
@@ -143,6 +113,27 @@ const UserSearch = () => {
   const handleJoinGroup = (group) => {
     setCurrentGroup(group);
     setJoinModalOpen(true);
+  };
+
+  const handleAddFriendClick = (user) => {
+    setFriendTarget(user);
+    setAddFriendOpen(true);
+  };
+
+  const submitAddFriend = async ({ message: msg }) => {
+    if (!friendTarget?.id) return;
+    setAddFriendLoading(true);
+    try {
+      await friendApi.addFriendRequest(friendTarget.id, msg);
+      message.success('好友申请已发送');
+      setSentFriendRequests(prev => new Set(prev).add(friendTarget.id));
+      setAddFriendOpen(false);
+    } catch (e) {
+      console.error(e);
+      message.error(e.response?.data?.message || '发送好友申请失败');
+    } finally {
+      setAddFriendLoading(false);
+    }
   };
 
   const submitJoinRequest = async (messageText) => {
@@ -256,6 +247,93 @@ const UserSearch = () => {
         };
 
   const resultCount = activeTab === 'group' ? groups.length : (total || users.length);
+
+  const renderUserList = () => (
+    <List
+      loading={loading}
+      dataSource={users}
+      locale={{
+        emptyText: (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              searched
+                ? '暂无结果（需精确匹配）'
+                : '请输入用户名/手机号/邮箱进行搜索'
+            }
+          />
+        ),
+      }}
+      renderItem={(item) => {
+        const isFriend = friendIds.has(item.id);
+        const isSent = sentFriendRequests.has(item.id);
+        const isSelf = currentUser && String(currentUser.id) === String(item.id);
+
+        let actionNode;
+        if (isSelf) {
+          actionNode = <Tag>我自己</Tag>;
+        } else if (isFriend) {
+          actionNode = <Tag color="green">已添加</Tag>;
+        } else if (isSent) {
+          actionNode = <Tag color="gold">已申请</Tag>;
+        } else {
+          actionNode = (
+            <Button
+              key="add"
+              type="primary"
+              ghost
+              icon={<UserAddOutlined />}
+              onClick={() => handleAddFriendClick(item)}
+            >
+              加好友
+            </Button>
+          );
+        }
+
+        return (
+          <List.Item
+            actions={[
+              <Button
+                key="view"
+                type="link"
+                onClick={() => {
+                  setSelectedUserId(item.id);
+                  setProfileOpen(true);
+                }}
+              >
+                查看
+              </Button>,
+              actionNode,
+            ]}
+          >
+            <List.Item.Meta
+              avatar={<Avatar src={item.avatar} icon={<UserOutlined />} size="large" />}
+              title={
+                <Space>
+                  <Text strong>{item.nickname || item.username}</Text>
+                  <Tag color={item.status === 1 ? 'green' : 'red'}>
+                    {item.status === 1 ? '正常' : '禁用'}
+                  </Tag>
+                </Space>
+              }
+              description={
+                <Space direction="vertical" size={0}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    @{item.username}
+                  </Text>
+                  {item.signature ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {item.signature}
+                    </Text>
+                  ) : null}
+                </Space>
+              }
+            />
+          </List.Item>
+        );
+      }}
+    />
+  );
 
   const renderGroupList = () => (
     <List
@@ -445,29 +523,7 @@ const UserSearch = () => {
       </Card>
 
       <Card style={{ borderRadius: 16 }}>
-        {activeTab === 'user' ? (
-          <Table
-            rowKey="id"
-            loading={loading}
-            columns={columns}
-            dataSource={users}
-            pagination={false}
-            locale={{
-              emptyText: (
-                <Empty
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                  description={
-                    searched
-                      ? '暂无结果（需精确匹配）'
-                      : '请输入用户名/手机号/邮箱进行搜索'
-                  }
-                />
-              ),
-            }}
-          />
-        ) : (
-          renderGroupList()
-        )}
+        {activeTab === 'user' ? renderUserList() : renderGroupList()}
       </Card>
 
       <JoinGroupModal
@@ -477,6 +533,14 @@ const UserSearch = () => {
         onCancel={() => setJoinModalOpen(false)}
         onSubmit={submitJoinRequest}
         loading={joinLoading}
+      />
+
+      <AddFriendModal
+        open={addFriendOpen}
+        targetUser={friendTarget}
+        onCancel={() => setAddFriendOpen(false)}
+        onSubmit={submitAddFriend}
+        submitting={addFriendLoading}
       />
 
       <Drawer

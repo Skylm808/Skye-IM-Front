@@ -143,7 +143,13 @@ const ForgotPassword = () => {
                     loading={sending}
                     onClick={handleSendCaptcha}
                     block
-                    style={{ borderRadius: 14, fontSize: 14 }}
+                    style={{ 
+                      borderRadius: 14, 
+                      fontSize: 14,
+                      color: countdown > 0 ? 'rgba(0, 0, 0, 0.45)' : undefined,
+                      backgroundColor: countdown > 0 ? '#f5f5f5' : undefined,
+                      borderColor: countdown > 0 ? '#d9d9d9' : undefined
+                    }}
                   >
                     {countdown > 0 ? `${countdown}s` : '发送验证码'}
                   </Button>
