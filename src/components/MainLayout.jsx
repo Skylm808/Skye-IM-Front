@@ -494,6 +494,19 @@ const MainLayout = ({ pageTitle, children }) => {
 
         wsClient.connect();
       } catch (e) {
+        const status = e?.response?.status;
+        const url = e?.response?.config?.url || e?.config?.url || '';
+        const isProfileInit = typeof url === 'string' && url.includes('/api/v1/user/profile');
+        const isAuthFailure = isProfileInit && (status === 400 || status === 401 || status === 403);
+
+        if (isAuthFailure) {
+          message.destroy();
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          navigate('/login');
+          return;
+        }
+
         console.error('Init failed', e);
       } finally {
         setLoading(false);
